@@ -178,7 +178,7 @@ Prefetch 距離掃描（dense_array）：k=1 只有部分效果；k=2–16 都�
 - [x] B-tree / SoA / pool-alloc levels、ankerl / absl index、prefetch、allocator × THP
 - [x] 減少 cache miss：order 節點 32 bytes、compact fingerprint index、prefetch 用的 `peek()`
 - [ ] 降低刪單時碰到鄰居節點的成本：每個價位改用陣列/分段陣列存 order（刪除做 tombstone、延遲壓縮）
-- [ ] 每種事件類型分開量測（perf counters 在這台 VM 不可用，改用 rdtsc 分類統計）
+- [ ] 每種事件類型分開量測（這台 VM 沒有安裝 perf，可先用 rdtsc 依事件類型分類統計）
 - [ ] 在較安靜的機器（isolcpus / 固定頻率）重跑，降低雜訊
 - [ ] 量測拆解：perf counters（cache miss / branch miss）per event type
 - [ ] OMD-C SF adapter（30/31/32/33/34/50…）
