@@ -19,6 +19,10 @@ using namespace obl::book;
 
 namespace {
 
+inline constexpr char kTinyWindowName[] = "dense(256 window, test only)";
+template <Side S>
+using TinyWindowLevels = ArrayLevels<S, 256, FarLevelMap<S>, kTinyWindowName>;
+
 // (symbol, side, price, [(id, qty) in queue order])
 using LevelSnap = std::tuple<SymbolId, int, Price, std::vector<std::pair<OrderId, Qty>>>;
 using Snapshot = std::vector<LevelSnap>;
@@ -348,6 +352,14 @@ int main() {
     test_random_vs_reference<Book>({2, 20000, 3000, 10, 0.05});  // wide, off-tick prices
     test_random_vs_reference<Book>({3, 20000, 200000, 1, 0.0});  // beyond the dense window span
   });
+  // Smallest window (256 ticks) + B-tree/map far store: the random walks below
+  // span far more than the window, so recentering and far-store migration run constantly.
+  using TinyWindowBook = L3Book<TinyWindowLevels, OpenAddressingOrderIndex>;
+  test_semantics<TinyWindowBook>();
+  test_random_vs_reference<TinyWindowBook>({6, 30000, 3000, 1, 0.0});
+  test_random_vs_reference<TinyWindowBook>({7, 30000, 3000, 10, 0.05});
+  test_random_vs_reference<TinyWindowBook>({8, 30000, 300, 1, 0.0});
+
   // 4-bit fingerprints: almost every probe is a fingerprint collision, so the
   // key verification against the order node is what keeps results correct.
   using CollidingBook = L3Book<DenseArrayLevels, CompactOrderIndexT<4>>;

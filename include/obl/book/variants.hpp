@@ -20,6 +20,24 @@ using BinaryVectorLevels = SortedVectorLevels<S, VecSearch::Binary>;
 template <Side S>
 using DenseArrayLevels = ArrayLevels<S>;
 
+// Hybrid: small dense window around the best + B-tree for far-away prices
+// (std::map when built without abseil), with recentering.
+#ifdef OBL_HAVE_ABSEIL
+template <Side S>
+using FarLevelMap = absl::btree_map<Price, Level, LevelCmp<S>>;
+inline constexpr char kHybrid4kName[] = "hybrid(4K window+btree)";
+inline constexpr char kHybrid1kName[] = "hybrid(1K window+btree)";
+#else
+template <Side S>
+using FarLevelMap = std::map<Price, Level, LevelCmp<S>>;
+inline constexpr char kHybrid4kName[] = "hybrid(4K window+map)";
+inline constexpr char kHybrid1kName[] = "hybrid(1K window+map)";
+#endif
+template <Side S>
+using Hybrid4kLevels = ArrayLevels<S, 4096, FarLevelMap<S>, kHybrid4kName>;
+template <Side S>
+using Hybrid1kLevels = ArrayLevels<S, 1024, FarLevelMap<S>, kHybrid1kName>;
+
 using OA = OpenAddressingOrderIndex;
 
 using MapStdBook = L3Book<MapLevels, StdOrderIndex>;
@@ -32,6 +50,8 @@ using ArrayStdBook = L3Book<DenseArrayLevels, StdOrderIndex>;
 using ArrayOpenBook = L3Book<DenseArrayLevels, OA>;
 using ArrayCompactBook = L3Book<DenseArrayLevels, CompactOrderIndex>;
 using VecLinearCompactBook = L3Book<LinearVectorLevels, CompactOrderIndex>;
+using Hybrid4kOpenBook = L3Book<Hybrid4kLevels, OA>;
+using Hybrid1kOpenBook = L3Book<Hybrid1kLevels, OA>;
 // per-level vector queues instead of the intrusive list
 using ArrayOpenVqBook = L3Book<DenseArrayLevels, OA, VectorQueues>;
 using ArrayCompactVqBook = L3Book<DenseArrayLevels, CompactOrderIndex, VectorQueues>;
@@ -58,6 +78,8 @@ void for_each_variant(F&& f) {
   f.template operator()<VecBinaryBook>();
   f.template operator()<SoaVecBook>();
   f.template operator()<ArrayOpenBook>();
+  f.template operator()<Hybrid4kOpenBook>();
+  f.template operator()<Hybrid1kOpenBook>();
   // order indexes (with the dense array)
   f.template operator()<ArrayStdBook>();
   f.template operator()<ArrayCompactBook>();

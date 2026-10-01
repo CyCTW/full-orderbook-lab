@@ -1,7 +1,7 @@
 // obl_bench: compare L3 book data structures on a captured / synthetic feed.
 //
 //   obl_bench FILE.pcap[.gz] [--repeat 3] [--latency] [--only SUBSTR] [--reserve N]
-//                            [--prefetch K] [--port P] [--key-by-group] [--tick cent|mpv|none] [--no-fork]
+//                            [--prefetch K [--prefetch-min-orders N]] [--port P] [--key-by-group] [--tick cent|mpv|none] [--no-fork]
 //
 // The capture is decoded once into feed-neutral events; each variant then
 // replays the same events. Every variant runs in a forked child so it starts
@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -83,10 +84,16 @@ double tsc_ghz() {
 }
 
 // Replay with lookahead: index slot prefetched 2K events ahead, order node K ahead.
+// Adaptive: prefetching is skipped while the book holds fewer than min_orders
+// orders (a small book is cache resident and prefetch is pure overhead).
 template <class Book>
-void replay_prefetch(Book& b, const std::vector<book::Event>& events, std::size_t k) {
+void replay_prefetch(Book& b, const std::vector<book::Event>& events, std::size_t k, std::size_t min_orders) {
   const std::size_t n = events.size();
   for (std::size_t i = 0; i < n; ++i) {
+    if (b.order_count() < min_orders) {
+      book::apply(b, events[i]);
+      continue;
+    }
     if (i + 2 * k < n) {
       const auto& f = events[i + 2 * k];
       if (f.type != book::EventType::SetTick && f.type != book::EventType::ClearSymbol) b.prefetch_index(f.sym, f.id);
@@ -102,7 +109,7 @@ void replay_prefetch(Book& b, const std::vector<book::Event>& events, std::size_
 template <class Book>
 Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& cap,
                    const tools::FeedOptions& opt, int repeat, bool latency, std::size_t reserve,
-                   std::size_t prefetch) {
+                   std::size_t prefetch, std::size_t prefetch_min_orders) {
   Result r;
   const long rss0 = rss_kb();
   std::vector<double> runs;
@@ -181,7 +188,7 @@ Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& 
       auto b = std::make_unique<Book>();
       if (reserve) b->reserve(reserve, 1 << 16);
       const auto t0 = Clock::now();
-      replay_prefetch(*b, events, prefetch);
+      replay_prefetch(*b, events, prefetch, prefetch_min_orders);
       pf.push_back(std::chrono::duration<double, std::nano>(Clock::now() - t0).count() /
                    std::max<std::size_t>(1, events.size()));
       if (b->checksum() != r.checksum) r.level_missing += 1'000'000;
@@ -231,7 +238,7 @@ int main(int argc, char** argv) {
   tools::Args args(argc, argv);
   if (args.positional().empty() && !args.has("events")) {
     std::puts("usage: obl_bench (FILE.pcap[.gz]... | --events FILE.ev) [--repeat N] [--latency] [--only SUBSTR] [--reserve N]\n"
-              "                 [--prefetch K] [--port P] [--key-by-group] [--tick cent|mpv|none] [--no-fork]");
+              "                 [--prefetch K [--prefetch-min-orders N]] [--port P] [--key-by-group] [--tick cent|mpv|none] [--no-fork]");
     return 1;
   }
   const tools::FeedOptions opt(args);
@@ -241,6 +248,13 @@ int main(int argc, char** argv) {
   const std::size_t reserve = args.u64("reserve", 0);
   const bool fork_enabled = !args.has("no-fork");
   const std::size_t prefetch = args.u64("prefetch", 0);
+  const std::size_t prefetch_min_orders = args.u64("prefetch-min-orders", 0);
+  std::vector<std::string> only_list;  // --only a,b,c: any substring matches
+  {
+    std::stringstream ss(only);
+    for (std::string t; std::getline(ss, t, ',');)
+      if (!t.empty()) only_list.push_back(t);
+  }
 
   const char* preload = std::getenv("LD_PRELOAD");
   std::printf("allocator: %s\n", preload && *preload ? preload : "glibc (default)");
@@ -281,9 +295,12 @@ int main(int argc, char** argv) {
   std::vector<std::pair<std::string, Result>> rows;
   book::for_each_variant([&]<class Book>() {
     const std::string name = Book::name();
-    if (!only.empty() && name.find(only) == std::string::npos) return;
+    if (!only_list.empty() && std::none_of(only_list.begin(), only_list.end(), [&](const std::string& t) {
+          return name.find(t) != std::string::npos;
+        }))
+      return;
     const Result r = in_child(fork_enabled, [&] {
-      return run_variant<Book>(events, cap, opt, repeat, latency, reserve, prefetch);
+      return run_variant<Book>(events, cap, opt, repeat, latency, reserve, prefetch, prefetch_min_orders);
     });
     if (!r.ok) {
       std::printf("%-48s  FAILED (child crashed)\n", name.c_str());

@@ -7,22 +7,34 @@
 // std::map, so correctness never depends on the tick size or the price range;
 // only speed does. When the window later grows over prices held in overflow,
 // they are migrated so every price lives in exactly one place.
+//
+// Recentering: when a better price arrives outside a window that cannot grow
+// any further (or the window is empty), the window is moved so that price
+// sits near its "better" edge: window levels go to the far store, far levels
+// inside the new range come back. Rare, O(span + levels moved).
+//
+// MaxSpan, the far store type and the reported name are template parameters,
+// so a small window + B-tree far store ("hybrid") is the same code.
 
 #include <bit>
 #include <functional>
 #include <map>
 #include <vector>
 
+#include "obl/book/levels_map.hpp"
 #include "obl/book/order_pool.hpp"
 
 namespace obl::book {
 
-template <Side S, std::int64_t MaxSpan = (1 << 16)>
+inline constexpr char kDenseArrayName[] = "dense_array";
+
+template <Side S, std::int64_t MaxSpan = (1 << 16), class Far = std::map<Price, Level, LevelCmp<S>>,
+          const char* Name = kDenseArrayName>
 class ArrayLevels {
-  static_assert(MaxSpan % 64 == 0);
+  static_assert(MaxSpan % 64 == 0 && MaxSpan >= 256);
 
  public:
-  static constexpr const char* name = "dense_array";
+  static constexpr const char* name = Name;
   static constexpr std::int64_t kInitialSpan = 256;
 
   void set_tick(Price tick) {
@@ -35,7 +47,10 @@ class ArrayLevels {
 
   Level& get_or_create(Price p) {
     std::int64_t s = slot_of(p);
-    if (s < 0 && on_tick(p) && grow_to(p / tick_)) s = slot_of(p);
+    if (s < 0 && on_tick(p)) {
+      const std::int64_t t = p / tick_;
+      if (grow_to(t) || (should_recenter(t) && recenter(t))) s = slot_of(p);
+    }
     if (s < 0) {
       auto [it, inserted] = overflow_.try_emplace(p);
       if (inserted) {
@@ -103,7 +118,7 @@ class ArrayLevels {
 
   // Slow-path counters (diagnostics only).
   struct Diag {
-    std::uint64_t grows = 0, grow_slots_copied = 0, overflow_levels_created = 0, off_tick_levels = 0;
+    std::uint64_t grows = 0, grow_slots_copied = 0, overflow_levels_created = 0, off_tick_levels = 0, recenters = 0;
   };
   const Diag& diag() const { return diag_; }
   std::size_t window_span() const { return slots_.size(); }
@@ -117,7 +132,6 @@ class ArrayLevels {
   }
 
  private:
-  using Cmp = std::conditional_t<S == Side::Buy, std::greater<Price>, std::less<Price>>;
 
   bool on_tick(Price p) const { return p >= 0 && p % tick_ == 0; }
 
@@ -217,10 +231,15 @@ class ArrayLevels {
     return true;
   }
 
+  // Pulls far-store levels whose prices now fall inside the window. Only the
+  // window's price range of the (ordered) far store is visited.
   void migrate_overflow() {
-    for (auto it = overflow_.begin(); it != overflow_.end();) {
+    if (slots_.empty() || overflow_.empty()) return;
+    const Price plo = lo_ * tick_, phi = (lo_ + span() - 1) * tick_;
+    auto it = overflow_.lower_bound(S == Side::Buy ? phi : plo);  // first entry inside, in far-store order
+    while (it != overflow_.end() && it->first >= plo && it->first <= phi) {
       const std::int64_t s = slot_of(it->first);
-      if (s < 0) {
+      if (s < 0) {  // off-tick: stays in the far store
         ++it;
         continue;
       }
@@ -232,13 +251,36 @@ class ArrayLevels {
     }
   }
 
+  // A price outside a full-size window: recenter only if it would become the
+  // window's best (the market moved), never for far-away worse prices.
+  bool should_recenter(std::int64_t t) const {
+    if (best_ < 0) return true;
+    if constexpr (S == Side::Buy) return t > lo_ + best_;
+    else return t < lo_ + best_;
+  }
+
+  bool recenter(std::int64_t t) {
+    ++diag_.recenters;
+    for (std::int64_t s = 0; s < span(); ++s) {
+      if (!test(s)) continue;
+      overflow_.try_emplace(slots_[s].price, slots_[s]);
+    }
+    std::fill(bits_.begin(), bits_.end(), 0);
+    const std::int64_t margin = span() / 8;  // room for prices that improve on the best
+    lo_ = S == Side::Buy ? t - (span() - margin) : t - margin;
+    best_ = -1;
+    window_levels_ = 0;
+    migrate_overflow();
+    return true;
+  }
+
   Price tick_ = 1;
   std::int64_t lo_ = 0;  // tick index of slot 0
   std::vector<Level> slots_;
   std::vector<std::uint64_t> bits_;
   std::int64_t best_ = -1;
   std::size_t window_levels_ = 0;
-  std::map<Price, Level, Cmp> overflow_;
+  Far overflow_;
   Diag diag_;
 };
 
