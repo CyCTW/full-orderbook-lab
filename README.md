@@ -148,11 +148,37 @@ glibc（無 THP）的 best-of-5，ns/event：
 結論：目前最佳組合是 **dense_array 或 sorted_vector(linear) + open addressing + prefetch + THP**，約 95–100 ns/event。
 下一步要再往下壓，重點在減少每筆事件的 cache miss 數（order 節點與 index 合併、per-symbol 小 index 等），而不是換 allocator。
 
+## 結果 2：減少 cache miss（32B order 節點、compact index）
+
+方法：把前一個 commit 編成 baseline，與新版**交錯**各跑兩次（A B A B，`--repeat 5 --prefetch 4`），
+降低 VM 雜訊的影響。原始輸出：`results/2026-10-01_node32_compact_ab.txt`。
+
+| 改動 | 無 prefetch | prefetch | 結論 |
+|---|---|---|---|
+| Order 節點 40B → 32B、32B 對齊（不跨 cache line） | 各變體 ±10% 兩個方向都有 | 同左 | **無可量測差異** |
+| `compact_fp(8B)` index（fingerprint + pool index，用 order 節點驗證 key） | dense_array：**111–122 ns** vs open addressing 133–195 ns | 100–104 ns vs 92–108 ns | 無 prefetch 時穩定快 **15–20%**；有 prefetch 時打平 |
+| sorted_vector(linear) + compact | 114–120 ns | 106–116 ns | RSS 最低（26 MB） |
+
+Prefetch 距離掃描（dense_array）：k=1 只有部分效果；k=2–16 都在 92–107 ns，k=32 開始變差。
+
+解讀：
+
+- Compact index 把 index 從 16 MB 縮成 8 MB（每條 cache line 8 個 slot），沒 prefetch 時 index miss 變少，所以快。
+  有 prefetch 時 index miss 已被隱藏，兩者收斂到同一個 ~95–105 ns 的底。
+- 一開始 compact + prefetch 反而沒變快：第二階段 prefetch 呼叫 `find()`，而 compact index 驗證 key 要讀 order 節點，
+  prefetch 自己就卡在它要預取的 miss 上。加了不驗證的 `peek()` 專給 prefetch 用之後才恢復。
+- 剩下的底推測來自 FIFO 雙向鏈結：刪單時要改前後鄰居節點（`prev`/`next`），那是兩條沒被 prefetch 的隨機 cache line。
+
+測試補強：random 差分測試改成每個 symbol 各自編 order id（同一個 id 同時存在多個 symbol，符合 OMD-C 語意），
+並加了 4-bit fingerprint 的變體強制碰撞。原本的測試抓不到「compact index 只比 id 不比 symbol」這個植入的 bug，補強後抓得到。
+
 ## 下一步
 
 - [ ] 取得真實 NYSE XDP 樣本驗證 layout 與分佈
 - [x] B-tree / SoA / pool-alloc levels、ankerl / absl index、prefetch、allocator × THP
-- [ ] 減少 cache miss：index 直接存 order（省一次跳轉）、per-symbol index、order 節點縮小到 32 bytes
+- [x] 減少 cache miss：order 節點 32 bytes、compact fingerprint index、prefetch 用的 `peek()`
+- [ ] 降低刪單時碰到鄰居節點的成本：每個價位改用陣列/分段陣列存 order（刪除做 tombstone、延遲壓縮）
+- [ ] 每種事件類型分開量測（perf counters 在這台 VM 不可用，改用 rdtsc 分類統計）
 - [ ] 在較安靜的機器（isolcpus / 固定頻率）重跑，降低雜訊
 - [ ] 量測拆解：perf counters（cache miss / branch miss）per event type
 - [ ] OMD-C SF adapter（30/31/32/33/34/50…）

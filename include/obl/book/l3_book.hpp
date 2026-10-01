@@ -171,7 +171,10 @@ class L3Book {
   }
 
   void prefetch_order(SymbolId sym, OrderId id) const {
-    const std::uint32_t i = index_.find(sym, id);
+    // A verifying find() on a compact index would itself stall on the node.
+    std::uint32_t i;
+    if constexpr (requires(const Index& ix) { ix.peek(sym, id); }) i = index_.peek(sym, id);
+    else i = index_.find(sym, id);
     if (i != kNil) __builtin_prefetch(&pool_[i]);
   }
 

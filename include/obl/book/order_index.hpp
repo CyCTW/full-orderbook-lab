@@ -228,6 +228,18 @@ class CompactOrderIndexT {
 
   void prefetch(SymbolId sym, OrderId id) const { __builtin_prefetch(&slots_[home(fingerprint(sym, id))]); }
 
+  // First fingerprint match WITHOUT verifying the key (no order-node read).
+  // For prefetching only: the result may be a different order, or kNil.
+  std::uint32_t peek(SymbolId sym, OrderId id) const {
+    const std::uint32_t fp = fingerprint(sym, id);
+    std::size_t i = home(fp);
+    while (slots_[i].value != kNil) {
+      if (slots_[i].fp == fp) return slots_[i].value;
+      i = (i + 1) & mask_;
+    }
+    return kNil;
+  }
+
   std::uint32_t erase(SymbolId sym, OrderId id) {
     const std::uint32_t fp = fingerprint(sym, id);
     std::size_t i = home(fp);
