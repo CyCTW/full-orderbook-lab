@@ -1,0 +1,47 @@
+allocator: glibc (default)
+events file data/itch/top20_20251208.ev (no end-to-end column: no packets)
+events 95191963: add 34953319, modify 0, execute 2065686, remove 33303670, replace 24447250, cancel 422018, clear 0
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)     p50     p90     p99   p99.9      max  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                           417.6ns   433.7ns     2.39    -1.0ns   424.0ns     333     935    1549    7223 99109281     82.9       0         0  d300f0520f7624e2
+std::map + open_addressing                         203.4ns   206.6ns     4.92    -1.0ns   177.2ns     209     408     843    3280 213547658     84.1       0         0  d300f0520f7624e2
+std::map(pool alloc) + open_addressing             196.1ns   200.9ns     5.10    -1.0ns   176.1ns     209     410     910    3470 159920990     87.5       0         0  d300f0520f7624e2
+absl::btree_map + open_addressing                  188.8ns   196.8ns     5.30    -1.0ns   147.7ns     204     387     670    3159 362320950     62.6       0         0  d300f0520f7624e2
+sorted_vector(linear) + open_addressing            286.2ns   297.0ns     3.49    -1.0ns   242.5ns     210     662    1766    5940 153200325     86.0       0         0  d300f0520f7624e2
+sorted_vector(binary) + open_addressing            205.9ns   213.6ns     4.86    -1.0ns   166.4ns     209     437     870    4004 131788877     86.0       0         0  d300f0520f7624e2
+sorted_vector_soa(linear) + open_addressing        276.3ns   292.6ns     3.62    -1.0ns   248.6ns     207     662    1789    5784 328006268     69.8       0         0  d300f0520f7624e2
+dense_array + open_addressing                      117.5ns   122.5ns     8.51    -1.0ns    98.8ns     131     290     497    1663 136332567    153.1       0         0  d300f0520f7624e2
+hybrid(4K window+btree) + open_addressing          121.7ns   129.9ns     8.21    -1.0ns   103.2ns     140     296     510    2034 156928676     90.3       0         0  d300f0520f7624e2
+hybrid(1K window+btree) + open_addressing          141.8ns   147.0ns     7.05    -1.0ns   114.6ns     167     330     570    1660 138523269     92.4       0         0  d300f0520f7624e2
+dense_array + unordered_map                        349.7ns   351.9ns     2.86    -1.0ns   344.6ns     220     874    1429    5367 108393171    148.1       0         0  d300f0520f7624e2
+dense_array + compact_fp(8B)                       109.8ns   112.2ns     9.11    -1.0ns   117.2ns     107     267     472     977 117116445    126.9       0         0  d300f0520f7624e2
+sorted_vector(linear) + compact_fp(8B)             265.6ns   270.2ns     3.77    -1.0ns   266.7ns     197     621    1684    5417 89603233     58.4       0         0  d300f0520f7624e2
+dense_array + open_addressing + vector_queue       134.9ns   158.3ns     7.41    -1.0ns   120.2ns     140     320     602    3194 147446267    164.6       0         0  d300f0520f7624e2
+dense_array + compact_fp(8B) + vector_queue        135.8ns   149.3ns     7.36    -1.0ns   141.0ns     121     325     627    3051 110530972    139.8       0         0  d300f0520f7624e2
+sorted_vector(linear) + compact_fp(8B) + vector_queue   302.9ns   320.6ns     3.30    -1.0ns   301.0ns     233     736    1896    6734 78442056     73.6       0         0  d300f0520f7624e2
+dense_array + ankerl::unordered_dense              106.3ns   111.1ns     9.41    -1.0ns   106.8ns      82     215     487     914 13754063    148.7       0         0  d300f0520f7624e2
+dense_array + absl::flat_hash_map                  112.0ns   134.2ns     8.92    -1.0ns   109.4ns     105     241     469     943 14908835    170.4       0         0  d300f0520f7624e2
+
+per event type, ns (mean of lower 99.9% / p50 / p99), rdtsc overhead removed
+variant                                                          add              modify             execute              remove             replace              cancel
+std::map + unordered_map                             504/  429/ 1489       0/    0/    0     267/  171/ 1024     286/  180/ 1338     625/  582/ 1724     214/  138/ 1267
+std::map + open_addressing                           221/  196/  675       0/    0/    0     153/  125/  529     182/  139/  859     305/  267/  970     145/  107/  837
+std::map(pool alloc) + open_addressing               227/  199/  730       0/    0/    0     151/  121/  529     186/  140/  933     302/  260/ 1040     151/  110/  889
+absl::btree_map + open_addressing                    209/  194/  584       0/    0/    0     134/   96/  533     156/  110/  665     284/  252/  725     117/   80/  644
+sorted_vector(linear) + open_addressing              212/  188/ 1134       0/    0/    0     103/   64/  463     155/   90/  898     622/  483/ 2473     104/   66/  550
+sorted_vector(binary) + open_addressing              212/  194/  559       0/    0/    0     135/  103/  486     154/  108/  594     375/  324/ 1221     114/   81/  539
+sorted_vector_soa(linear) + open_addressing          202/  186/  922       0/    0/    0      98/   61/  448     148/   87/  806     639/  492/ 2576      99/   62/  529
+dense_array + open_addressing                        134/  148/  468       0/    0/    0      90/   59/  411     100/   63/  457     195/  194/  530      71/   50/  403
+hybrid(4K window+btree) + open_addressing            137/  150/  478       0/    0/    0      90/   59/  415     103/   64/  481     196/  194/  538      72/   50/  411
+hybrid(1K window+btree) + open_addressing            141/  154/  515       0/    0/    0      94/   60/  429     108/   65/  524     241/  218/  625      73/   50/  441
+dense_array + unordered_map                          416/  233/ 1480       0/    0/    0     202/  107/  968     198/  109/  967     503/  350/ 1570     118/   64/  806
+dense_array + compact_fp(8B)                         127/  139/  443       0/    0/    0      83/   58/  389      91/   60/  444     181/  185/  491      67/   49/  387
+sorted_vector(linear) + compact_fp(8B)               193/  179/ 1050       0/    0/    0      91/   61/  419     138/   79/  839     589/  450/ 2394      96/   65/  507
+dense_array + open_addressing + vector_queue         142/  157/  495       0/    0/    0     108/   67/  523     103/   55/  639     213/  205/  645      80/   51/  473
+dense_array + compact_fp(8B) + vector_queue          143/  152/  518       0/    0/    0     107/   67/  548     102/   54/  667     216/  208/  664      83/   54/  510
+sorted_vector(linear) + compact_fp(8B) + vector_queue     227/  206/ 1208       0/    0/    0     129/   70/  649     180/   87/ 1127     672/  527/ 2684     123/   69/  671
+dense_array + ankerl::unordered_dense                 80/   46/  403       0/    0/    0      88/   63/  488      93/   65/  536     124/  103/  478      72/   54/  486
+dense_array + absl::flat_hash_map                    109/   94/  405       0/    0/    0      83/   57/  412      94/   61/  474     154/  132/  490      75/   50/  437
+(event share)                                                  36.7%                0.0%                2.2%               35.0%               25.7%                0.4%
+
+all variants agree on the final book (full depth + queue order)

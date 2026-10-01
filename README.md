@@ -297,13 +297,64 @@ B-tree 兩邊都不是第一但都不差，是最「穩」的通用選擇；若�
 （best 附近用小陣列/稠密視窗，遠端價位放 B-tree 或排序陣列）。
 注意：NYSE 樣本的 dense_array 是在 tick 修正前測的，需用一分錢 tick 重測。
 
+## 結果 6：最終比較與推薦方案
+
+這一輪做的改動：
+
+- **dense_array 改用一分錢 tick**（`--tick cent`，預設）：NYSE 樣本從 90 ns / 587 MB 變成 48 ns / 36 MB。
+  先前「dense_array 有大量 overflow 配置（0.14 次/事件）」的說法是測試設定錯誤造成的（那次只載入中段的小時檔，
+  缺少 symbol mapping，tick 退回 1）；正確設定下 overflow 只有 0.003–0.005 次/事件。
+- **混合結構**：`ArrayLevels` 的視窗上限、遠端容器、名稱改為模板參數，並加入**重新置中**（較好的價格落在已滿的視窗外時，
+  把視窗移過去）與依價格範圍搬移；新增 `hybrid(4K window+btree)`、`hybrid(1K window+btree)`。
+- **Replace 原地處理**：沿用同一個 order 節點，只換 index key，重新排到該價位隊尾；價格不變時不刪除/重建價位。
+- **自適應 prefetch**：`--prefetch-min-orders N`，掛單數少於 N 時不 prefetch（小 book 在 cache 裡，prefetch 只有成本）。
+
+三份資料、18 個變體、同一版程式（`results/final_*.txt`；NYSE 與合成資料 `--repeat 3`，ITCH `--repeat 2`；
+prefetch k=4、門檻 5 萬筆）。每格為「一般 / 自適應 prefetch」ns/event；最後一欄是三份資料相對各自最佳值的幾何平均（1.000 = 每份都最快）。
+
+| variant | NYSE 2019（淺） | 合成（中） | Nasdaq 熱門 20 檔（深） | 綜合 |
+|---|---|---|---|---|
+| **dense_array + open_addressing** | 48.0 / 50.3 | 143.7 / **97.5** | 117.5 / **98.8** | **1.028** |
+| hybrid(4K window+btree) + open_addressing | 46.7 / 51.3 | 145.8 / 100.6 | 121.7 / 103.2 | 1.045 |
+| hybrid(1K window+btree) + open_addressing | 48.4 / 53.2 | 131.6 / 97.2 | 141.8 / 114.6 | 1.082 |
+| dense_array + compact_fp(8B) | 52.1 / 49.9 | 122.5 / 102.8 | 109.8 / 117.2 | 1.098 |
+| dense_array + absl::flat_hash_map | 52.6 / 53.0 | 157.4 / 110.5 | 112.0 / 109.4 | 1.144 |
+| dense_array + ankerl::unordered_dense | **44.6** / 48.3 | 189.0 / 154.9 | 106.3 / 106.8 | 1.200 |
+| absl::btree_map + open_addressing | 61.5 / 60.3 | 158.4 / 105.5 | 188.8 / 147.7 | 1.302 |
+| sorted_vector(linear) + open_addressing | 48.2 / 51.1 | 156.4 / 96.5 | 286.2 / 242.5 | 1.384 |
+| std::map + open_addressing | 63.6 / 66.9 | 161.3 / 122.0 | 203.4 / 177.2 | 1.479 |
+| std::map + unordered_map | 89.1 / 90.3 | 370.3 / 343.2 | 417.6 / 424.0 | 3.108 |
+
+### 推薦方案
+
+**`dense_array`（一分錢 tick、std::map overflow）+ `open_addressing` index + intrusive FIFO list + 自適應 prefetch（k=4，掛單 ≥ 5 萬筆才啟用）**
+
+- 三份資料綜合最佳（1.028）：淺 book 與最佳差 8% 以內（44.6 vs 48.0），中、深 book 都是第一或並列第一（97.5、98.8 ns）。
+- 尾端延遲也在前段：p99 160 / 580 / 497 ns（三份資料）。
+- 記憶體：NYSE 36 MB、Nasdaq 熱門 20 檔約 150 MB；需要更省時改用 `hybrid(4K window+btree)`（綜合 1.045，只慢約 2%）。
+- 實作要點：tick 用實際價格格點（不要用 MPV）；index 用 open addressing 或 compact（compact 不開 prefetch 時更好）；
+  排隊用 intrusive list（vector_queue 在三份資料都較慢）；`std::unordered_map` 一律避免（慢 2–3 倍）。
+
+沒有入選的原因：
+
+- `sorted_vector(linear)`：淺 book 很好，但深 book（每邊上千價位）慢 2.5 倍，p99 到 1.7 µs。
+- B-tree / std::map：各種資料都穩定但都不是前段（綜合 1.30 / 1.48）。
+- `ankerl::unordered_dense`：淺、深都很好，但在合成資料（大量隨機刪單）明顯變慢，且沒有 prefetch 介面。
+- `vector_queue`：三份資料都比 intrusive list 慢。
+- 換 allocator：熱路徑幾乎不配置記憶體，影響在雜訊內。
+
+Replace 原地處理的效果：樹與排序陣列類的 replace 快 10–17%（std::map 369 → 305 ns）；dense_array 本來建立/刪除價位就是 O(1)，
+在雜訊內沒有差別。
+
 ## 下一步
 
 - [x] 取得真實 NYSE XDP 樣本驗證 layout 與分佈（結果 4）
 - [x] dense_array 改用一分錢 tick（`--tick cent`，預設）
 - [x] 熱門商品真實資料：Nasdaq ITCH 熱門 20 檔（結果 5）
-- [ ] NYSE 樣本用一分錢 tick 重測 dense_array
-- [ ] 混合價位結構：best 附近稠密視窗 + 遠端 B-tree / 排序陣列
+- [x] NYSE 樣本用一分錢 tick 重測 dense_array（結果 6）
+- [x] 混合價位結構：稠密視窗 + B-tree，含重新置中（結果 6）
+- [x] Replace 原地處理、自適應 prefetch（結果 6）
+- [ ] 在實體機（固定頻率、隔離核心、perf）重測，確認 5% 等級的差異
 - [ ] 依真實分佈校準產生器（價位數、best 掛單數、新單落點、事件比例）
 - [x] B-tree / SoA / pool-alloc levels、ankerl / absl index、prefetch、allocator × THP
 - [x] 減少 cache miss：order 節點 32 bytes、compact fingerprint index、prefetch 用的 `peek()`
