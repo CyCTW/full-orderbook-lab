@@ -1,0 +1,5 @@
+/build*/
+/data/
+*.pcap
+*.pcap.gz
+compile_commands.json
