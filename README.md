@@ -77,6 +77,8 @@ Feed adapter 只把線上訊息轉成 `add / modify / execute / remove / replace
 ```bash
 cmake -S . -B build && cmake --build build -j
 ctest --test-dir build                     # 含與 naive reference book 的差分測試
+# sanitizer：GCC 的 UBSan 編不過 abseil，sanitizer build 請關 abseil
+cmake -S . -B build-asan -DOBL_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug -DOBL_WITH_ABSEIL=OFF -DOBL_WITH_MIMALLOC=OFF
 
 # 合成資料（XDP 格式 PCAP）
 ./build/obl_gen --out data/synth_5m.pcap --messages 5e6 --symbols 300
@@ -172,13 +174,35 @@ Prefetch 距離掃描（dense_array）：k=1 只有部分效果；k=2–16 都�
 測試補強：random 差分測試改成每個 symbol 各自編 order id（同一個 id 同時存在多個 symbol，符合 OMD-C 語意），
 並加了 4-bit fingerprint 的變體強制碰撞。原本的測試抓不到「compact index 只比 id 不比 symbol」這個植入的 bug，補強後抓得到。
 
+## 結果 3：FIFO 佇列結構（intrusive list vs 每價位陣列）—— 負面結果
+
+假設：刪單要改前後鄰居節點（兩條隨機 cache line），是剩下成本的主因。
+做法：`L3Book` 新增第三個模板參數 `Queues`：`ListQueues`（原本的雙向鏈結）或 `VectorQueues`
+（每個價位一個 pool index 陣列，刪單只寫 tombstone，tombstone 過半時壓縮並改寫存活 order 的位置）。
+`obl_bench --latency` 新增**依事件類型**的延遲（扣掉 rdtsc 本身成本）。原始輸出：`results/2026-10-01_vector_queue.txt`（跑兩次）。
+
+| dense_array + compact_fp | ns/event | remove（mean） | add（mean） |
+|---|---|---|---|
+| ListQueues | 117–139 | 194–209 | 111–115 |
+| VectorQueues | 174–181 | 275–319 | 122–142 |
+
+**假設不成立**：VectorQueues 全面較慢（所有搭配都是）。原因判斷：
+
+1. 合成資料最熱的價位約有 3,400 筆掛單，`slots[pos]` 本身就是大陣列裡的一條隨機 cache line，和碰鄰居節點差不多貴。
+2. 壓縮時要改寫每個存活 order 節點的位置（存活至少一半），攤提下來每次刪單約多一次節點 miss。
+3. 依類型拆解：remove ≈ add + ~90 ns，大約正好一次 miss——也就是 order 節點本身。這是查到 order 後一定要讀的，
+   prefetch 正是在藏這個 miss，所以 prefetch 後的 ~95–105 ns 已接近這個資料規模下的底。
+
+保留 `VectorQueues` 作為對照。注意：真實行情最熱價位的掛單數可能遠少於合成資料，到時候結論可能不同，要用真實樣本重測。
+
 ## 下一步
 
 - [ ] 取得真實 NYSE XDP 樣本驗證 layout 與分佈
 - [x] B-tree / SoA / pool-alloc levels、ankerl / absl index、prefetch、allocator × THP
 - [x] 減少 cache miss：order 節點 32 bytes、compact fingerprint index、prefetch 用的 `peek()`
-- [ ] 降低刪單時碰到鄰居節點的成本：每個價位改用陣列/分段陣列存 order（刪除做 tombstone、延遲壓縮）
-- [ ] 每種事件類型分開量測（這台 VM 沒有安裝 perf，可先用 rdtsc 依事件類型分類統計）
+- [x] 每種事件類型分開量測（rdtsc，`--latency`）
+- [x] 每價位陣列佇列（`VectorQueues`）：比雙向鏈結慢，見結果 3
+- [ ] 讓合成資料的價位深度更接近真實（目前最熱價位 ~3,400 筆掛單，偏多）；或用真實樣本校準分佈
 - [ ] 在較安靜的機器（isolcpus / 固定頻率）重跑，降低雜訊
 - [ ] 量測拆解：perf counters（cache miss / branch miss）per event type
 - [ ] OMD-C SF adapter（30/31/32/33/34/50…）
