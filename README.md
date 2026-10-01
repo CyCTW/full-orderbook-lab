@@ -44,20 +44,33 @@ Feed adapter 只把線上訊息轉成 `add / modify / execute / remove / replace
 
 ### 目前的變體（`include/obl/book/variants.hpp`）
 
+矩陣設計：每種 Levels 搭 open addressing（隔離價位容器的影響）、每種 Index 搭 dense array（隔離 index 的影響）。
+
 | Levels | 說明 |
 |---|---|
 | `std::map` | 紅黑樹，baseline |
+| `std::map(pool alloc)` | 同上，node 改由固定大小 free-list arena 配置（`node_pool.hpp`） |
+| `absl::btree_map` | B-tree，每個 node 多個 key，查找碰到的 cache line 少 |
 | `sorted_vector(linear)` | 連續陣列，best 在尾端，從尾端線性搜尋 |
 | `sorted_vector(binary)` | 同上，二分搜尋 |
+| `sorted_vector_soa(linear)` | 價格獨立成一個陣列（SoA），搜尋只掃 8 bytes/level |
 | `dense_array` | 以 tick 為索引的稠密陣列，O(1) 找價位；bitmap 找下一個 best；超出視窗/非整 tick 價格進 overflow map |
 
 | Index | 說明 |
 |---|---|
 | `unordered_map` | std baseline（node-based） |
-| `open_addressing` | linear probing、2 的冪容量、load ≤ 0.5、backward-shift 刪除（無 tombstone） |
+| `open_addressing` | 自寫：linear probing、2 的冪容量、load ≤ 0.5、backward-shift 刪除（無 tombstone） |
+| `ankerl::unordered_dense` | robin-hood + dense value array |
+| `absl::flat_hash_map` | Swiss table（SIMD control bytes） |
 
-新增變體：寫一個符合 `MapLevels` 介面的 Levels（`get_or_create / update / best / for_each / size / clear / set_tick`）
-或符合 `StdOrderIndex` 介面的 Index，加到 `variants.hpp` 的 `for_each_variant`，測試與 benchmark 會自動涵蓋。
+新增變體：寫一個符合 `OrderedMapLevels` 介面的 Levels（`get_or_create / update / best / for_each / size / clear / set_tick`）
+或符合 `HashMapOrderIndex` 介面的 Index，加到 `variants.hpp` 的 `for_each_variant`，測試與 benchmark 會自動涵蓋。
+
+### Software prefetch
+
+`obl_bench --prefetch K`：handler 一次收到一個封包（多筆訊息），可以往前看。
+兩階段：第 i+2K 筆事件先 prefetch index slot，第 i+K 筆時查 index（已在 cache）再 prefetch order 節點。
+只有提供 `prefetch()` 的 index 會做第一階段（open addressing、absl）。
 
 ## 建置與使用
 
@@ -72,8 +85,14 @@ ctest --test-dir build                     # 含與 naive reference book 的差�
 ./build/obl_dump data/synth_5m.pcap --print 20
 
 # Benchmark：每個變體在 fork 出的子行程跑（乾淨 heap、獨立量 RSS），結束時比對全深度 + 佇列順序 checksum
-./build/obl_bench data/synth_5m.pcap --repeat 3 --latency [--reserve 1000000] [--only dense]
+./build/obl_bench data/synth_5m.pcap --repeat 3 --latency [--reserve 1000000] [--only dense] [--prefetch 4]
+
+# 不同 malloc（同一個 binary，LD_PRELOAD）× 有無 transparent huge pages
+bench/run_allocators.sh data/synth_5m.pcap --repeat 5 --prefetch 4
 ```
+
+CMake 會用 FetchContent 抓 abseil（20260526.0）、ankerl::unordered_dense（v5.2.0）、mimalloc（v3.5.4，編成
+`build/lib/libmimalloc.so` 給 LD_PRELOAD 用）；可用 `-DOBL_WITH_ABSEIL=OFF` 等關掉。jemalloc 用系統的 `libjemalloc2`。
 
 真實 NYSE 樣本：下載 `ftp.nyse.com/Real Time Data Samples/NYSE XDP/NYSE_IBF/` 的檔案放到 `data/`，
 `obl_dump`/`obl_bench` 可直接讀 `.pcap.gz`。A/B 線預設以 UDP port 做仲裁（`--key-by-group` 改為 group+port）；

@@ -35,4 +35,10 @@ inline void apply(Book& b, const Event& e) {
   }
 }
 
+// Events that reference an existing order id (stage-2 prefetch target).
+inline bool references_order(const Event& e) {
+  return e.type == EventType::Modify || e.type == EventType::Execute || e.type == EventType::Remove ||
+         e.type == EventType::Replace;
+}
+
 }  // namespace obl::book

@@ -11,6 +11,46 @@ endif()
 
 option(OBL_NATIVE "Compile with -march=native" ON)
 option(OBL_SANITIZE "Build with address/undefined sanitizers" OFF)
+option(OBL_WITH_ABSEIL "Fetch abseil for absl::btree_map / absl::flat_hash_map variants" ON)
+option(OBL_WITH_UNORDERED_DENSE "Fetch ankerl::unordered_dense index variant" ON)
+option(OBL_WITH_MIMALLOC "Fetch and build libmimalloc.so (used via LD_PRELOAD)" ON)
+
+include(FetchContent)
+set(FETCHCONTENT_QUIET ON)
+
+if(OBL_WITH_UNORDERED_DENSE)
+  FetchContent_Declare(unordered_dense
+    GIT_REPOSITORY https://github.com/martinus/unordered_dense.git
+    GIT_TAG v5.2.0
+    GIT_SHALLOW TRUE
+    SYSTEM)
+  FetchContent_MakeAvailable(unordered_dense)
+endif()
+
+if(OBL_WITH_ABSEIL)
+  set(ABSL_PROPAGATE_CXX_STD ON)
+  set(ABSL_BUILD_TESTING OFF)
+  set(ABSL_ENABLE_INSTALL OFF)
+  FetchContent_Declare(abseil
+    GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
+    GIT_TAG 20260526.0
+    GIT_SHALLOW TRUE
+    SYSTEM)
+  FetchContent_MakeAvailable(abseil)
+endif()
+
+if(OBL_WITH_MIMALLOC)
+  set(MI_BUILD_TESTS OFF)
+  set(MI_BUILD_STATIC OFF)
+  set(MI_BUILD_OBJECT OFF)
+  FetchContent_Declare(mimalloc
+    GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
+    GIT_TAG v3.5.4
+    GIT_SHALLOW TRUE
+    SYSTEM)
+  FetchContent_MakeAvailable(mimalloc)
+  set_target_properties(mimalloc PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+endif()
 
 find_package(ZLIB)
 
@@ -23,6 +63,14 @@ endif()
 if(OBL_SANITIZE)
   target_compile_options(obl INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(obl INTERFACE -fsanitize=address,undefined)
+endif()
+if(OBL_WITH_UNORDERED_DENSE)
+  target_compile_definitions(obl INTERFACE OBL_HAVE_UNORDERED_DENSE=1)
+  target_link_libraries(obl INTERFACE unordered_dense::unordered_dense)
+endif()
+if(OBL_WITH_ABSEIL)
+  target_compile_definitions(obl INTERFACE OBL_HAVE_ABSEIL=1)
+  target_link_libraries(obl INTERFACE absl::btree absl::flat_hash_map)
 endif()
 if(ZLIB_FOUND)
   target_compile_definitions(obl INTERFACE OBL_HAVE_ZLIB=1)

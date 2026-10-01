@@ -149,6 +149,21 @@ class L3Book {
     b.asks.clear();
   }
 
+  // ------------------------------------------------------------ prefetch
+  // A handler sees several messages per packet, so it can look ahead:
+  //   stage 1 (far ahead):  prefetch the index slot of an upcoming order id
+  //   stage 2 (near ahead): resolve the id (slot now cached), prefetch the order node
+  static constexpr bool kCanPrefetch = requires(const Index& ix) { ix.prefetch(SymbolId{}, OrderId{}); };
+
+  void prefetch_index(SymbolId sym, OrderId id) const {
+    if constexpr (kCanPrefetch) index_.prefetch(sym, id);
+  }
+
+  void prefetch_order(SymbolId sym, OrderId id) const {
+    const std::uint32_t i = index_.find(sym, id);
+    if (i != kNil) __builtin_prefetch(&pool_[i]);
+  }
+
   // ------------------------------------------------------------ queries
   const SymbolBook* book(SymbolId sym) const { return sym < books_.size() ? &books_[sym] : nullptr; }
   std::size_t symbols() const { return books_.size(); }

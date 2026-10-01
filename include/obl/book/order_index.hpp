@@ -10,49 +10,81 @@
 
 #include "obl/common.hpp"
 
+#ifdef OBL_HAVE_UNORDERED_DENSE
+#include <ankerl/unordered_dense.h>
+#endif
+#ifdef OBL_HAVE_ABSEIL
+#include "absl/container/flat_hash_map.h"
+#endif
+
 namespace obl::book {
 
 inline std::uint64_t order_key_hash(SymbolId sym, OrderId id) {
   return mix64(id ^ (std::uint64_t(sym) * 0x9E3779B97F4A7C15ULL));
 }
 
-class StdOrderIndex {
+struct OrderKey {
+  OrderId id;
+  SymbolId sym;
+  bool operator==(const OrderKey&) const = default;
+};
+
+struct OrderKeyHash {
+  using is_avalanching = void;  // ankerl::unordered_dense: hash is already well mixed
+  std::size_t operator()(const OrderKey& k) const { return order_key_hash(k.sym, k.id); }
+};
+
+// Adapter for any unordered_map-like container keyed by OrderKey.
+template <class Map, const char* Name>
+class HashMapOrderIndex {
  public:
-  static constexpr const char* name = "unordered_map";
+  static constexpr const char* name = Name;
 
   void reserve(std::size_t n) { map_.reserve(n); }
 
   bool insert(SymbolId sym, OrderId id, std::uint32_t value) {
-    return map_.try_emplace(Key{id, sym}, value).second;
+    return map_.try_emplace(OrderKey{id, sym}, value).second;
   }
 
   std::uint32_t find(SymbolId sym, OrderId id) const {
-    auto it = map_.find(Key{id, sym});
+    auto it = map_.find(OrderKey{id, sym});
     return it == map_.end() ? kNil : it->second;
   }
 
   // Removes the entry and returns its value, or kNil if absent.
   std::uint32_t erase(SymbolId sym, OrderId id) {
-    auto it = map_.find(Key{id, sym});
+    auto it = map_.find(OrderKey{id, sym});
     if (it == map_.end()) return kNil;
     const std::uint32_t v = it->second;
     map_.erase(it);
     return v;
   }
 
+  void prefetch(SymbolId sym, OrderId id) const
+    requires requires(const Map& m) { m.prefetch(OrderKey{}); }
+  {
+    map_.prefetch(OrderKey{id, sym});
+  }
+
   std::size_t size() const { return map_.size(); }
 
  private:
-  struct Key {
-    OrderId id;
-    SymbolId sym;
-    bool operator==(const Key&) const = default;
-  };
-  struct Hash {
-    std::size_t operator()(const Key& k) const { return order_key_hash(k.sym, k.id); }
-  };
-  std::unordered_map<Key, std::uint32_t, Hash> map_;
+  Map map_;
 };
+
+inline constexpr char kStdIndexName[] = "unordered_map";
+using StdOrderIndex = HashMapOrderIndex<std::unordered_map<OrderKey, std::uint32_t, OrderKeyHash>, kStdIndexName>;
+
+#ifdef OBL_HAVE_UNORDERED_DENSE
+inline constexpr char kDenseIndexName[] = "ankerl::unordered_dense";
+using DenseOrderIndex =
+    HashMapOrderIndex<ankerl::unordered_dense::map<OrderKey, std::uint32_t, OrderKeyHash>, kDenseIndexName>;
+#endif
+
+#ifdef OBL_HAVE_ABSEIL
+inline constexpr char kAbslIndexName[] = "absl::flat_hash_map";
+using AbslOrderIndex = HashMapOrderIndex<absl::flat_hash_map<OrderKey, std::uint32_t, OrderKeyHash>, kAbslIndexName>;
+#endif
 
 // Linear probing, power-of-two capacity, max load 1/2, backward-shift deletion
 // (no tombstones, so probe lengths do not degrade under heavy churn).
@@ -87,6 +119,10 @@ class OpenAddressingOrderIndex {
       i = (i + 1) & mask_;
     }
     return kNil;
+  }
+
+  void prefetch(SymbolId sym, OrderId id) const {
+    __builtin_prefetch(&slots_[order_key_hash(sym, id) & mask_]);
   }
 
   std::uint32_t erase(SymbolId sym, OrderId id) {

@@ -1,7 +1,7 @@
 // obl_bench: compare L3 book data structures on a captured / synthetic feed.
 //
 //   obl_bench FILE.pcap[.gz] [--repeat 3] [--latency] [--only SUBSTR] [--reserve N]
-//                            [--port P] [--key-by-group] [--no-mpv-tick] [--no-fork]
+//                            [--prefetch K] [--port P] [--key-by-group] [--no-mpv-tick] [--no-fork]
 //
 // The capture is decoded once into feed-neutral events; each variant then
 // replays the same events. Every variant runs in a forked child so it starts
@@ -36,10 +36,12 @@ struct Result {
   double best_ns = 0, median_ns = 0;      // per event
   double p50 = 0, p90 = 0, p99 = 0, p999 = 0, max = 0;  // latency ns (if measured)
   double e2e_ns = 0;                      // decode + book per message, from raw packets
+  double pf_ns = -1;                      // replay with software prefetch (-1 = not run)
   std::uint64_t checksum = 0;
   std::uint64_t live_orders = 0;
   std::uint64_t unknown = 0, level_missing = 0;
   double rss_mb = 0;
+  double thp_mb = 0;                      // anonymous memory backed by transparent huge pages
   bool ok = false;
 };
 
@@ -48,6 +50,19 @@ long rss_kb() {
   long pages = 0, resident = 0;
   f >> pages >> resident;
   return resident * (sysconf(_SC_PAGESIZE) / 1024);
+}
+
+double anon_huge_mb() {
+  std::ifstream f("/proc/self/smaps_rollup");
+  std::string key;
+  long kb = 0;
+  while (f >> key) {
+    if (key == "AnonHugePages:") {
+      f >> kb;
+      return kb / 1024.0;
+    }
+  }
+  return 0;
 }
 
 double tsc_ghz() {
@@ -63,9 +78,27 @@ double tsc_ghz() {
   return ghz;
 }
 
+// Replay with lookahead: index slot prefetched 2K events ahead, order node K ahead.
+template <class Book>
+void replay_prefetch(Book& b, const std::vector<book::Event>& events, std::size_t k) {
+  const std::size_t n = events.size();
+  for (std::size_t i = 0; i < n; ++i) {
+    if (i + 2 * k < n) {
+      const auto& f = events[i + 2 * k];
+      if (f.type != book::EventType::SetTick && f.type != book::EventType::ClearSymbol) b.prefetch_index(f.sym, f.id);
+    }
+    if (i + k < n) {
+      const auto& f = events[i + k];
+      if (book::references_order(f)) b.prefetch_order(f.sym, f.id);
+    }
+    book::apply(b, events[i]);
+  }
+}
+
 template <class Book>
 Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& cap,
-                   const tools::FeedOptions& opt, int repeat, bool latency, std::size_t reserve) {
+                   const tools::FeedOptions& opt, int repeat, bool latency, std::size_t reserve,
+                   std::size_t prefetch) {
   Result r;
   const long rss0 = rss_kb();
   std::vector<double> runs;
@@ -82,6 +115,7 @@ Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& 
       r.unknown = b->stats().unknown_order;
       r.level_missing = b->stats().level_missing;
       r.rss_mb = (rss_kb() - rss0) / 1024.0;
+      r.thp_mb = anon_huge_mb();
     }
   }
   std::sort(runs.begin(), runs.end());
@@ -108,6 +142,20 @@ Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& 
       r.p999 = pct(0.999);
       r.max = cycles.back() / g;
     }
+  }
+
+  if (prefetch > 0) {
+    std::vector<double> pf;
+    for (int i = 0; i < repeat; ++i) {
+      auto b = std::make_unique<Book>();
+      if (reserve) b->reserve(reserve, 1 << 16);
+      const auto t0 = Clock::now();
+      replay_prefetch(*b, events, prefetch);
+      pf.push_back(std::chrono::duration<double, std::nano>(Clock::now() - t0).count() /
+                   std::max<std::size_t>(1, events.size()));
+      if (b->checksum() != r.checksum) r.level_missing += 1'000'000;
+    }
+    r.pf_ns = *std::min_element(pf.begin(), pf.end());
   }
 
   {  // end to end: arbitration + decode + book, straight from the packets
@@ -151,7 +199,7 @@ int main(int argc, char** argv) {
   tools::Args args(argc, argv);
   if (args.positional().empty()) {
     std::puts("usage: obl_bench FILE.pcap[.gz] [--repeat N] [--latency] [--only SUBSTR] [--reserve N]\n"
-              "                 [--port P] [--key-by-group] [--no-mpv-tick] [--no-fork]");
+              "                 [--prefetch K] [--port P] [--key-by-group] [--no-mpv-tick] [--no-fork]");
     return 1;
   }
   const tools::FeedOptions opt(args);
@@ -160,7 +208,10 @@ int main(int argc, char** argv) {
   const std::string only = args.str("only", "");
   const std::size_t reserve = args.u64("reserve", 0);
   const bool fork_enabled = !args.has("no-fork");
+  const std::size_t prefetch = args.u64("prefetch", 0);
 
+  const char* preload = std::getenv("LD_PRELOAD");
+  std::printf("allocator: %s\n", preload && *preload ? preload : "glibc (default)");
   const pcap::Capture cap = tools::load_capture(args.positional()[0]);
 
   std::vector<book::Event> events;
@@ -177,9 +228,10 @@ int main(int argc, char** argv) {
               events.size(), counts[0], counts[1], counts[2], counts[3], counts[4], counts[5],
               decode_ns / std::max<std::uint64_t>(1, st.messages));
 
-  std::printf("%-44s %9s %9s %8s %9s", "variant", "best", "median", "Mevt/s", "e2e/msg");
+  std::printf("%-48s %9s %9s %8s %9s", "variant", "best", "median", "Mevt/s", "e2e/msg");
+  if (prefetch) std::printf(" %9s", ("pf(k=" + std::to_string(prefetch) + ")").c_str());
   if (latency) std::printf(" %7s %7s %7s %7s %8s", "p50", "p90", "p99", "p99.9", "max");
-  std::printf(" %8s %9s  %s\n", "dRSS MB", "orders", "checksum");
+  std::printf(" %8s %7s %9s  %s\n", "dRSS MB", "THP MB", "orders", "checksum");
 
   std::uint64_t ref = 0;
   bool have_ref = false, mismatch = false;
@@ -187,10 +239,10 @@ int main(int argc, char** argv) {
     const std::string name = Book::name();
     if (!only.empty() && name.find(only) == std::string::npos) return;
     const Result r = in_child(fork_enabled, [&] {
-      return run_variant<Book>(events, cap, opt, repeat, latency, reserve);
+      return run_variant<Book>(events, cap, opt, repeat, latency, reserve, prefetch);
     });
     if (!r.ok) {
-      std::printf("%-44s  FAILED (child crashed)\n", name.c_str());
+      std::printf("%-48s  FAILED (child crashed)\n", name.c_str());
       mismatch = true;
       return;
     }
@@ -200,10 +252,11 @@ int main(int argc, char** argv) {
     }
     const bool same = r.checksum == ref && r.level_missing == 0;
     mismatch |= !same;
-    std::printf("%-44s %7.1fns %7.1fns %8.2f %7.1fns", name.c_str(), r.best_ns, r.median_ns, 1e3 / r.best_ns,
+    std::printf("%-48s %7.1fns %7.1fns %8.2f %7.1fns", name.c_str(), r.best_ns, r.median_ns, 1e3 / r.best_ns,
                 r.e2e_ns);
+    if (prefetch) std::printf(" %7.1fns", r.pf_ns);
     if (latency) std::printf(" %7.0f %7.0f %7.0f %7.0f %8.0f", r.p50, r.p90, r.p99, r.p999, r.max);
-    std::printf(" %8.1f %9" PRIu64 "  %016" PRIx64 "%s\n", r.rss_mb, r.live_orders, r.checksum,
+    std::printf(" %8.1f %7.0f %9" PRIu64 "  %016" PRIx64 "%s\n", r.rss_mb, r.thp_mb, r.live_orders, r.checksum,
                 same ? "" : "  <-- MISMATCH");
   });
   if (mismatch) {
