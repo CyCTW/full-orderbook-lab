@@ -55,7 +55,7 @@ class ReferenceBook {
     if (it == where_.end()) return false;
     if (q == 0) return remove(s, id);
     const Side side = it->second.first;
-    if (p == it->second.second && keep) {
+    if (p == it->second.second && keep && q <= find(s, id)->second) {
       find(s, id)->second = q;
       return true;
     }
@@ -65,6 +65,13 @@ class ReferenceBook {
   bool replace(SymbolId s, OrderId old_id, OrderId new_id, Side side, Price p, Qty q) {
     const bool r = remove(s, old_id);
     return add(s, new_id, side, p, q) && r;
+  }
+  bool replace(SymbolId s, OrderId old_id, OrderId new_id, Price p, Qty q) {
+    auto it = where_.find({s, old_id});
+    if (it == where_.end()) return false;
+    const Side side = it->second.first;
+    remove(s, old_id);
+    return add(s, new_id, side, p, q);
   }
   void clear_symbol(SymbolId s) {
     for (auto it = where_.begin(); it != where_.end();)
@@ -166,6 +173,30 @@ void test_semantics() {
   CHECK(b.modify(1, 100, 1005, 6, true));
   CHECK_EQ(b.depth(1, Side::Buy, 10).size(), 2u);
   CHECK_EQ(b.book(1)->bids.best()->price, 1005);
+  // a size increase loses priority even if the feed says it kept it
+  CHECK(b.add(1, 104, Side::Sell, 1020, 5));
+  CHECK(b.add(1, 105, Side::Sell, 1020, 5));
+  CHECK(b.modify(1, 104, 1020, 50, true));
+  {
+    bool found = false;
+    b.book(1)->asks.for_each([&](const Level& l) {
+      if (l.price != 1020) return true;
+      found = true;
+      CHECK_EQ(l.qty, 55u);
+      CHECK((b.queue(l) == std::vector<OrderId>{105, 104}));  // 104 went to the back
+      return false;
+    });
+    CHECK(found);
+  }
+  // replace without a side keeps the replaced order's side
+  CHECK(b.replace(1, 105, 106, 1030, 5));
+  {
+    bool found = false;
+    for (const auto& l : b.depth(1, Side::Sell, 10)) found |= l.price == 1030;
+    CHECK(found);
+  }
+  CHECK(b.remove(1, 104));
+  CHECK(b.remove(1, 106));
   // replace to an off-tick, far-away price (exercises dense-array overflow)
   CHECK(b.replace(1, 102, 103, Side::Buy, 7, 9));
   CHECK_EQ(b.depth(1, Side::Buy, 10).back().price, 7);
@@ -235,7 +266,8 @@ void test_random_vs_reference(const RandomOpsConfig& c) {
         const Side side = rng.chance(0.5) ? Side::Buy : Side::Sell;
         const Price p = price();
         const OrderId nid = next_id[ls]++;
-        CHECK_EQ(b.replace(ls, id, nid, side, p, q), ref.replace(ls, id, nid, side, p, q));
+        if (rng.chance(0.5)) CHECK_EQ(b.replace(ls, id, nid, side, p, q), ref.replace(ls, id, nid, side, p, q));
+        else CHECK_EQ(b.replace(ls, id, nid, p, q), ref.replace(ls, id, nid, p, q));  // side inherited
         live[k] = {ls, nid};
       } else {
         b.clear_symbol(ls);

@@ -27,12 +27,32 @@ struct FeedOptions {
   bool accept(const pcap::Datagram& d) const { return port < 0 || d.dst_port == port; }
 };
 
-inline pcap::Capture load_capture(const std::string& path) {
+// Loads one or more captures and concatenates them in the given order
+// (e.g. the hourly files of one session).
+inline pcap::Capture load_capture(const std::vector<std::string>& paths) {
   const auto t0 = std::chrono::steady_clock::now();
-  pcap::Capture cap = pcap::load(path);
+  pcap::Capture cap;
+  for (const auto& path : paths) {
+    pcap::Capture part = pcap::load(path);
+    if (cap.bytes.empty()) {
+      cap = std::move(part);
+      continue;
+    }
+    const std::size_t base = cap.bytes.size();
+    if (base + part.bytes.size() > 0xFFFFFFFFull) throw std::runtime_error("combined captures exceed 4 GiB");
+    cap.bytes.insert(cap.bytes.end(), part.bytes.begin(), part.bytes.end());
+    for (auto d : part.datagrams) {
+      d.offset += static_cast<std::uint32_t>(base);
+      cap.datagrams.push_back(d);
+    }
+    cap.frames += part.frames;
+    cap.non_udp += part.non_udp;
+    cap.truncated += part.truncated;
+  }
   const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  std::printf("capture %s: %.1f MB, %llu frames, %llu UDP datagrams, %llu non-UDP, %llu truncated (%.2fs)\n",
-              path.c_str(), cap.bytes.size() / 1e6, static_cast<unsigned long long>(cap.frames),
+  std::printf("capture %s%s: %.1f MB, %llu frames, %llu UDP datagrams, %llu non-UDP, %llu truncated (%.2fs)\n",
+              paths.empty() ? "" : paths[0].c_str(), paths.size() > 1 ? (" (+" + std::to_string(paths.size() - 1) + " more)").c_str() : "",
+              cap.bytes.size() / 1e6, static_cast<unsigned long long>(cap.frames),
               static_cast<unsigned long long>(cap.datagrams.size()),
               static_cast<unsigned long long>(cap.non_udp), static_cast<unsigned long long>(cap.truncated), s);
   return cap;

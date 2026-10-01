@@ -15,6 +15,7 @@ struct Event {
   EventType type;
   Side side;
   bool keep_priority;
+  bool side_present;  // Replace: false = inherit the side of the replaced order
   SymbolId sym;
   OrderId id;
   OrderId new_id;
@@ -29,7 +30,10 @@ inline void apply(Book& b, const Event& e) {
     case EventType::Modify: b.modify(e.sym, e.id, e.price, e.qty, e.keep_priority); break;
     case EventType::Execute: b.execute(e.sym, e.id, e.qty); break;
     case EventType::Remove: b.remove(e.sym, e.id); break;
-    case EventType::Replace: b.replace(e.sym, e.id, e.new_id, e.side, e.price, e.qty); break;
+    case EventType::Replace:
+      if (e.side_present) b.replace(e.sym, e.id, e.new_id, e.side, e.price, e.qty);
+      else b.replace(e.sym, e.id, e.new_id, e.price, e.qty);
+      break;
     case EventType::ClearSymbol: b.clear_symbol(e.sym); break;
     case EventType::SetTick: b.set_tick(e.sym, e.price); break;
   }

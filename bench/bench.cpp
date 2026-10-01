@@ -228,7 +228,7 @@ Result in_child(bool fork_enabled, F&& f) {
 int main(int argc, char** argv) {
   tools::Args args(argc, argv);
   if (args.positional().empty()) {
-    std::puts("usage: obl_bench FILE.pcap[.gz] [--repeat N] [--latency] [--only SUBSTR] [--reserve N]\n"
+    std::puts("usage: obl_bench FILE.pcap[.gz]... [--repeat N] [--latency] [--only SUBSTR] [--reserve N]\n"
               "                 [--prefetch K] [--port P] [--key-by-group] [--no-mpv-tick] [--no-fork]");
     return 1;
   }
@@ -242,7 +242,7 @@ int main(int argc, char** argv) {
 
   const char* preload = std::getenv("LD_PRELOAD");
   std::printf("allocator: %s\n", preload && *preload ? preload : "glibc (default)");
-  const pcap::Capture cap = tools::load_capture(args.positional()[0]);
+  const pcap::Capture cap = tools::load_capture(args.positional());
 
   std::vector<book::Event> events;
   events.reserve(cap.datagrams.size() * 8);

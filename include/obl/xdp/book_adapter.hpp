@@ -22,7 +22,8 @@ class BookAdapter : public NullVisitor {
   void on_delete(const DeleteOrder& m) { book_.remove(m.symbol_index, m.order_id); }
   void on_execution(const OrderExecution& m) { book_.execute(m.symbol_index, m.order_id, m.volume); }
   void on_replace(const ReplaceOrder& m) {
-    book_.replace(m.symbol_index, m.order_id, m.new_order_id, m.side, m.price, m.volume);
+    if (m.side_present) book_.replace(m.symbol_index, m.order_id, m.new_order_id, m.side, m.price, m.volume);
+    else book_.replace(m.symbol_index, m.order_id, m.new_order_id, m.price, m.volume);
   }
 
  private:

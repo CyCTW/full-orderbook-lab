@@ -120,6 +120,9 @@ inline constexpr std::uint16_t min_msg_size(std::uint16_t t) {
 }
 
 inline Side decode_side(std::uint8_t c) { return c == 'S' ? Side::Sell : Side::Buy; }
+// Some feed versions leave optional side bytes zeroed (the 2019 NYSE samples do
+// so for every Replace and Modify); only 'B' / 'S' carry information.
+inline bool side_present(std::uint8_t c) { return c == 'B' || c == 'S'; }
 inline std::uint8_t encode_side(Side s) { return s == Side::Sell ? 'S' : 'B'; }
 
 inline void encode_msg_header(std::uint8_t* p, std::uint16_t size, std::uint16_t type) {
@@ -389,13 +392,15 @@ struct ReplaceOrder {
   std::uint32_t price;
   std::uint32_t volume;
   Side side;
+  bool side_present = true;  // false: the side byte was not populated; keep the old order's side
 };
 
 inline ReplaceOrder decode_replace_order(const std::uint8_t* p) {
   return {load_le<std::uint32_t>(p + 4),  load_le<std::uint32_t>(p + 8),
           load_le<std::uint32_t>(p + 12), load_le<std::uint64_t>(p + 16),
           load_le<std::uint64_t>(p + 24), load_le<std::uint32_t>(p + 32),
-          load_le<std::uint32_t>(p + 36), decode_side(p[40])};
+          load_le<std::uint32_t>(p + 36), decode_side(p[40]),
+          side_present(p[40])};
 }
 
 inline std::size_t encode(std::uint8_t* p, const ReplaceOrder& m) {

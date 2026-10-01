@@ -117,7 +117,9 @@ class L3Book {
   }
 
   // keep_priority: the exchange says the order kept its queue position
-  // (XDP PositionChange == 0). A price change always loses priority.
+  // (XDP PositionChange == 0). Independently of that flag, a price change or a
+  // size increase always loses priority (exchange rule; also covers feeds that
+  // leave PositionChange unpopulated).
   bool modify(SymbolId sym, OrderId id, Price price, Qty qty, bool keep_priority) {
     const std::uint32_t i = index_.find(sym, id);
     if (i == kNil) {
@@ -127,7 +129,7 @@ class L3Book {
     if (qty == 0) return remove(sym, id);
     SymbolBook& b = books_[sym];
     Order& o = pool_[i];
-    if (price == o.price && keep_priority) {
+    if (price == o.price && qty <= o.qty && keep_priority) {
       const Qty old = o.qty;
       const auto resize = [&](Level& l) { l.qty = l.qty - old + qty; };
       const bool ok = o.side() == Side::Buy ? b.bids.update(price, resize) : b.asks.update(price, resize);
@@ -145,6 +147,18 @@ class L3Book {
   bool replace(SymbolId sym, OrderId old_id, OrderId new_id, Side side, Price price, Qty qty) {
     const bool removed = remove(sym, old_id);
     return add(sym, new_id, side, price, qty) && removed;
+  }
+
+  // Replace without a side on the wire: the new order keeps the old order's side.
+  bool replace(SymbolId sym, OrderId old_id, OrderId new_id, Price price, Qty qty) {
+    const std::uint32_t i = index_.find(sym, old_id);
+    if (i == kNil) {
+      ++stats_.unknown_order;
+      return false;
+    }
+    const Side side = pool_[i].side();
+    remove(sym, old_id);
+    return add(sym, new_id, side, price, qty);
   }
 
   void clear_symbol(SymbolId sym) {
