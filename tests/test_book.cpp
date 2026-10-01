@@ -116,10 +116,10 @@ Snapshot snapshot(const Book& b) {
       return [&, side](const Level& l) {
         std::vector<std::pair<OrderId, Qty>> q;
         std::uint64_t total = 0;
-        for (std::uint32_t i = l.head; i != kNil; i = b.pool()[i].next) {
-          q.push_back({b.pool()[i].id, b.pool()[i].qty});
-          total += b.pool()[i].qty;
-        }
+        b.for_each_order(l, [&](const Order& o) {
+          q.push_back({o.id, o.qty});
+          total += o.qty;
+        });
         CHECK_EQ(total, l.qty);
         CHECK_EQ(q.size(), l.count);
         out.emplace_back(s, side, l.price, std::move(q));

@@ -32,6 +32,10 @@ using ArrayStdBook = L3Book<DenseArrayLevels, StdOrderIndex>;
 using ArrayOpenBook = L3Book<DenseArrayLevels, OA>;
 using ArrayCompactBook = L3Book<DenseArrayLevels, CompactOrderIndex>;
 using VecLinearCompactBook = L3Book<LinearVectorLevels, CompactOrderIndex>;
+// per-level vector queues instead of the intrusive list
+using ArrayOpenVqBook = L3Book<DenseArrayLevels, OA, VectorQueues>;
+using ArrayCompactVqBook = L3Book<DenseArrayLevels, CompactOrderIndex, VectorQueues>;
+using VecLinearCompactVqBook = L3Book<LinearVectorLevels, CompactOrderIndex, VectorQueues>;
 #ifdef OBL_HAVE_ABSEIL
 using BTreeOpenBook = L3Book<BTreeLevels, OA>;
 using ArrayAbslBook = L3Book<DenseArrayLevels, AbslOrderIndex>;
@@ -58,6 +62,10 @@ void for_each_variant(F&& f) {
   f.template operator()<ArrayStdBook>();
   f.template operator()<ArrayCompactBook>();
   f.template operator()<VecLinearCompactBook>();
+  // FIFO queue policy
+  f.template operator()<ArrayOpenVqBook>();
+  f.template operator()<ArrayCompactVqBook>();
+  f.template operator()<VecLinearCompactVqBook>();
 #ifdef OBL_HAVE_UNORDERED_DENSE
   f.template operator()<ArrayDenseBook>();
 #endif

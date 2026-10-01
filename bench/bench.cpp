@@ -42,6 +42,9 @@ struct Result {
   std::uint64_t unknown = 0, level_missing = 0;
   double rss_mb = 0;
   double thp_mb = 0;                      // anonymous memory backed by transparent huge pages
+  // per event type (Add, Modify, Execute, Remove, Replace), --latency only, rdtsc overhead removed
+  double type_mean[5] = {}, type_p50[5] = {}, type_p99[5] = {};
+  std::uint64_t type_count[5] = {};
   bool ok = false;
 };
 
@@ -132,8 +135,35 @@ Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& 
       const auto c1 = __rdtsc();
       cycles[i] = static_cast<std::uint32_t>(std::min<std::uint64_t>(c1 - c0, 0xFFFFFFFFu));
     }
-    std::sort(cycles.begin(), cycles.end());
+    // empty rdtsc pair cost, subtracted from the per-type figures
+    std::uint64_t overhead = ~0ull;
+    for (int i = 0; i < 1000; ++i) {
+      const auto c0 = __rdtsc();
+      const auto c1 = __rdtsc();
+      overhead = std::min<std::uint64_t>(overhead, c1 - c0);
+    }
     const double g = tsc_ghz();
+    {
+      std::vector<std::uint32_t> by_type[5];
+      for (std::size_t i = 0; i < events.size(); ++i) {
+        const int t = static_cast<int>(events[i].type);
+        if (t < 5) by_type[t].push_back(cycles[i] > overhead ? cycles[i] - static_cast<std::uint32_t>(overhead) : 0);
+      }
+      for (int t = 0; t < 5; ++t) {
+        auto& v = by_type[t];
+        if (v.empty()) continue;
+        std::sort(v.begin(), v.end());
+        // mean over the lower 99.9% so a few preemptions do not dominate
+        const std::size_t keep = std::max<std::size_t>(1, v.size() - v.size() / 1000);
+        double sum = 0;
+        for (std::size_t i = 0; i < keep; ++i) sum += v[i];
+        r.type_mean[t] = sum / keep / g;
+        r.type_p50[t] = v[v.size() / 2] / g;
+        r.type_p99[t] = v[std::min(v.size() - 1, v.size() * 99 / 100)] / g;
+        r.type_count[t] = v.size();
+      }
+    }
+    std::sort(cycles.begin(), cycles.end());
     const auto pct = [&](double q) { return cycles[std::min(cycles.size() - 1, std::size_t(q * cycles.size()))] / g; };
     if (!cycles.empty()) {
       r.p50 = pct(0.5);
@@ -235,6 +265,7 @@ int main(int argc, char** argv) {
 
   std::uint64_t ref = 0;
   bool have_ref = false, mismatch = false;
+  std::vector<std::pair<std::string, Result>> rows;
   book::for_each_variant([&]<class Book>() {
     const std::string name = Book::name();
     if (!only.empty() && name.find(only) == std::string::npos) return;
@@ -256,9 +287,27 @@ int main(int argc, char** argv) {
                 r.e2e_ns);
     if (prefetch) std::printf(" %7.1fns", r.pf_ns);
     if (latency) std::printf(" %7.0f %7.0f %7.0f %7.0f %8.0f", r.p50, r.p90, r.p99, r.p999, r.max);
+    rows.emplace_back(name, r);
     std::printf(" %8.1f %7.0f %9" PRIu64 "  %016" PRIx64 "%s\n", r.rss_mb, r.thp_mb, r.live_orders, r.checksum,
                 same ? "" : "  <-- MISMATCH");
   });
+  if (latency) {
+    static const char* kTypes[5] = {"add", "modify", "execute", "remove", "replace"};
+    std::printf("\nper event type, ns (mean of lower 99.9%% / p50 / p99), rdtsc overhead removed\n%-48s", "variant");
+    for (const char* t : kTypes) std::printf(" %19s", t);
+    std::printf("\n");
+    for (const auto& [name, r] : rows) {
+      std::printf("%-48s", name.c_str());
+      for (int t = 0; t < 5; ++t) std::printf("   %5.0f/%5.0f/%5.0f", r.type_mean[t], r.type_p50[t], r.type_p99[t]);
+      std::printf("\n");
+    }
+    std::printf("%-48s", "(event share)");
+    std::uint64_t total = 0;
+    for (int t = 0; t < 5; ++t) total += rows.empty() ? 0 : rows[0].second.type_count[t];
+    for (int t = 0; t < 5; ++t)
+      std::printf(" %18.1f%%", total ? 100.0 * rows[0].second.type_count[t] / total : 0.0);
+    std::printf("\n");
+  }
   if (mismatch) {
     std::puts("\nERROR: variants disagree on the final book state");
     return 2;

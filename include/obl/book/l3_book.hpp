@@ -13,6 +13,7 @@
 
 #include "obl/book/order_index.hpp"
 #include "obl/book/order_pool.hpp"
+#include "obl/book/queues.hpp"
 
 namespace obl::book {
 
@@ -30,7 +31,7 @@ struct LevelView {
   std::uint32_t count;
 };
 
-template <template <Side> class LevelsT, class Index>
+template <template <Side> class LevelsT, class Index, class Queues = ListQueues>
 class L3Book {
  public:
   using Bids = LevelsT<Side::Buy>;
@@ -41,7 +42,11 @@ class L3Book {
     Asks asks;
   };
 
-  static std::string name() { return std::string(Bids::name) + " + " + Index::name; }
+  static std::string name() {
+    std::string n = std::string(Bids::name) + " + " + Index::name;
+    if constexpr (Queues::name != nullptr) n += std::string(" + ") + Queues::name;
+    return n;
+  }
 
   L3Book() {
     if constexpr (requires(Index& ix, const OrderPool* p) { ix.attach(p); }) index_.attach(&pool_);
@@ -146,12 +151,11 @@ class L3Book {
     if (sym >= books_.size()) return;
     SymbolBook& b = books_[sym];
     const auto drop = [&](const Level& l) {
-      for (std::uint32_t i = l.head; i != kNil;) {
-        const std::uint32_t next = pool_[i].next;
+      queues_.for_each(l, pool_, [&](std::uint32_t i) {
         index_.erase(sym, pool_[i].id);
         pool_.release(i);
-        i = next;
-      }
+      });
+      queues_.release(l);
       return true;
     };
     b.bids.for_each(drop);
@@ -199,10 +203,16 @@ class L3Book {
     return out;
   }
 
+  // Visits the orders of a level in queue (FIFO) order: f(const Order&).
+  template <class F>
+  void for_each_order(const Level& l, F&& f) const {
+    queues_.for_each(l, pool_, [&](std::uint32_t i) { f(pool_[i]); });
+  }
+
   // Order ids at a level in queue (FIFO) order.
   std::vector<OrderId> queue(const Level& l) const {
     std::vector<OrderId> ids;
-    for (std::uint32_t i = l.head; i != kNil; i = pool_[i].next) ids.push_back(pool_[i].id);
+    for_each_order(l, [&](const Order& o) { ids.push_back(o.id); });
     return ids;
   }
 
@@ -217,10 +227,10 @@ class L3Book {
         mix(static_cast<std::uint64_t>(l.price));
         mix(l.qty);
         mix(l.count);
-        for (std::uint32_t i = l.head; i != kNil; i = pool_[i].next) {
-          mix(pool_[i].id);
-          mix(pool_[i].qty);
-        }
+        for_each_order(l, [&](const Order& o) {
+          mix(o.id);
+          mix(o.qty);
+        });
         return true;
       };
       mix(0xB1D);
@@ -239,13 +249,13 @@ class L3Book {
 
   void link(SymbolBook& b, std::uint32_t i) {
     const Order& o = pool_[i];
-    if (o.side() == Side::Buy) level_push_back(b.bids.get_or_create(o.price), pool_, i);
-    else level_push_back(b.asks.get_or_create(o.price), pool_, i);
+    if (o.side() == Side::Buy) queues_.push_back(b.bids.get_or_create(o.price), pool_, i);
+    else queues_.push_back(b.asks.get_or_create(o.price), pool_, i);
   }
 
   void unlink(SymbolBook& b, std::uint32_t i) {
     const Order& o = pool_[i];
-    const auto take_out = [&](Level& l) { level_unlink(l, pool_, i); };
+    const auto take_out = [&](Level& l) { queues_.unlink(l, pool_, i); };
     const bool ok = o.side() == Side::Buy ? b.bids.update(o.price, take_out) : b.asks.update(o.price, take_out);
     if (!ok) ++stats_.level_missing;
   }
@@ -253,6 +263,7 @@ class L3Book {
   std::vector<SymbolBook> books_;
   OrderPool pool_;
   Index index_;
+  Queues queues_;
   BookStats stats_;
 };
 
