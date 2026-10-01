@@ -1,0 +1,8 @@
+allocator: glibc (default)
+events file data/nyse_ibf/nyse_20190122.ev (no end-to-end column: no packets)
+events 14138982: add 6744333, modify 570482, execute 66886, remove 6700041, replace 55724, cancel 0, clear 758
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)     p50     p90     p99   p99.9      max  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                            89.1ns    94.7ns    11.23    -1.0ns    90.3ns      95     142     250     578  1770765     13.1       0         0  701849944f44d081
+std::map + open_addressing                          63.6ns    67.1ns    15.72    -1.0ns    66.9ns      74     119     207     493  1944973     12.8       0         0  701849944f44d081
+std::map(pool alloc) + open_addressing              61.7ns    63.7ns    16.21    -1.0ns    62.7ns      71     113     195     411  2222298     12.8       0         0  701849944f44d081
