@@ -35,7 +35,7 @@ using Clock = std::chrono::steady_clock;
 struct Result {
   double best_ns = 0, median_ns = 0;      // per event
   double p50 = 0, p90 = 0, p99 = 0, p999 = 0, max = 0;  // latency ns (if measured)
-  double e2e_ns = 0;                      // decode + book per message, from raw packets
+  double e2e_ns = -1;                     // decode + book per message, from raw packets (-1 = no packets)
   double pf_ns = -1;                      // replay with software prefetch (-1 = not run)
   std::uint64_t checksum = 0;
   std::uint64_t live_orders = 0;
@@ -43,8 +43,9 @@ struct Result {
   double rss_mb = 0;
   double thp_mb = 0;                      // anonymous memory backed by transparent huge pages
   // per event type (Add, Modify, Execute, Remove, Replace), --latency only, rdtsc overhead removed
-  double type_mean[5] = {}, type_p50[5] = {}, type_p99[5] = {};
-  std::uint64_t type_count[5] = {};
+  double type_mean[book::kOrderEventTypes] = {}, type_p50[book::kOrderEventTypes] = {},
+         type_p99[book::kOrderEventTypes] = {};
+  std::uint64_t type_count[book::kOrderEventTypes] = {};
   bool ok = false;
 };
 
@@ -144,12 +145,12 @@ Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& 
     }
     const double g = tsc_ghz();
     {
-      std::vector<std::uint32_t> by_type[5];
+      std::vector<std::uint32_t> by_type[book::kOrderEventTypes];
       for (std::size_t i = 0; i < events.size(); ++i) {
         const int t = static_cast<int>(events[i].type);
-        if (t < 5) by_type[t].push_back(cycles[i] > overhead ? cycles[i] - static_cast<std::uint32_t>(overhead) : 0);
+        if (t < book::kOrderEventTypes) by_type[t].push_back(cycles[i] > overhead ? cycles[i] - static_cast<std::uint32_t>(overhead) : 0);
       }
-      for (int t = 0; t < 5; ++t) {
+      for (int t = 0; t < book::kOrderEventTypes; ++t) {
         auto& v = by_type[t];
         if (v.empty()) continue;
         std::sort(v.begin(), v.end());
@@ -188,7 +189,7 @@ Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& 
     r.pf_ns = *std::min_element(pf.begin(), pf.end());
   }
 
-  {  // end to end: arbitration + decode + book, straight from the packets
+  if (!cap.datagrams.empty()) {  // end to end: arbitration + decode + book, straight from the packets
     auto b = std::make_unique<Book>();
     if (reserve) b->reserve(reserve, 1 << 16);
     xdp::BookAdapter<Book> adapter(*b, opt.tick);
@@ -227,8 +228,8 @@ Result in_child(bool fork_enabled, F&& f) {
 
 int main(int argc, char** argv) {
   tools::Args args(argc, argv);
-  if (args.positional().empty()) {
-    std::puts("usage: obl_bench FILE.pcap[.gz]... [--repeat N] [--latency] [--only SUBSTR] [--reserve N]\n"
+  if (args.positional().empty() && !args.has("events")) {
+    std::puts("usage: obl_bench (FILE.pcap[.gz]... | --events FILE.ev) [--repeat N] [--latency] [--only SUBSTR] [--reserve N]\n"
               "                 [--prefetch K] [--port P] [--key-by-group] [--tick cent|mpv|none] [--no-fork]");
     return 1;
   }
@@ -242,21 +243,27 @@ int main(int argc, char** argv) {
 
   const char* preload = std::getenv("LD_PRELOAD");
   std::printf("allocator: %s\n", preload && *preload ? preload : "glibc (default)");
-  const pcap::Capture cap = tools::load_capture(args.positional());
-
+  // Input: XDP captures (positional), or a pre-extracted event file (--events, e.g. from obl_itch).
+  pcap::Capture cap;
   std::vector<book::Event> events;
-  events.reserve(cap.datagrams.size() * 8);
-  xdp::EventRecorder rec(events, opt.tick);
-  const auto t0 = Clock::now();
-  const auto st = tools::decode_capture(cap, opt, rec);
-  const double decode_ns = std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
-  tools::print_decode_stats(st);
-  std::size_t counts[8] = {};
+  if (args.has("events")) {
+    events = book::load_events(args.str("events", ""));
+    std::printf("events file %s (no end-to-end column: no packets)\n", args.str("events", "").c_str());
+  } else {
+    cap = tools::load_capture(args.positional());
+    events.reserve(cap.datagrams.size() * 8);
+    xdp::EventRecorder rec(events, opt.tick);
+    const auto t0 = Clock::now();
+    const auto st = tools::decode_capture(cap, opt, rec);
+    const double decode_ns = std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
+    tools::print_decode_stats(st);
+    std::printf("decode+record %.1f ns/msg\n", decode_ns / std::max<std::uint64_t>(1, st.messages));
+  }
+  std::size_t counts[16] = {};
   for (const auto& e : events) ++counts[static_cast<int>(e.type)];
-  std::printf("events %zu: add %zu, modify %zu, execute %zu, remove %zu, replace %zu, clear %zu  "
-              "(decode+record %.1f ns/msg)\n\n",
-              events.size(), counts[0], counts[1], counts[2], counts[3], counts[4], counts[5],
-              decode_ns / std::max<std::uint64_t>(1, st.messages));
+  std::printf("events %zu:", events.size());
+  for (int t = 0; t < book::kOrderEventTypes; ++t) std::printf(" %s %zu,", book::kEventTypeNames[t], counts[t]);
+  std::printf(" clear %zu\n\n", counts[static_cast<int>(book::EventType::ClearSymbol)]);
 
   std::printf("%-48s %9s %9s %8s %9s", "variant", "best", "median", "Mevt/s", "e2e/msg");
   if (prefetch) std::printf(" %9s", ("pf(k=" + std::to_string(prefetch) + ")").c_str());
@@ -292,19 +299,19 @@ int main(int argc, char** argv) {
                 same ? "" : "  <-- MISMATCH");
   });
   if (latency) {
-    static const char* kTypes[5] = {"add", "modify", "execute", "remove", "replace"};
     std::printf("\nper event type, ns (mean of lower 99.9%% / p50 / p99), rdtsc overhead removed\n%-48s", "variant");
-    for (const char* t : kTypes) std::printf(" %19s", t);
+    for (int t = 0; t < book::kOrderEventTypes; ++t) std::printf(" %19s", book::kEventTypeNames[t]);
     std::printf("\n");
     for (const auto& [name, r] : rows) {
       std::printf("%-48s", name.c_str());
-      for (int t = 0; t < 5; ++t) std::printf("   %5.0f/%5.0f/%5.0f", r.type_mean[t], r.type_p50[t], r.type_p99[t]);
+      for (int t = 0; t < book::kOrderEventTypes; ++t)
+        std::printf("   %5.0f/%5.0f/%5.0f", r.type_mean[t], r.type_p50[t], r.type_p99[t]);
       std::printf("\n");
     }
     std::printf("%-48s", "(event share)");
     std::uint64_t total = 0;
-    for (int t = 0; t < 5; ++t) total += rows.empty() ? 0 : rows[0].second.type_count[t];
-    for (int t = 0; t < 5; ++t)
+    for (int t = 0; t < book::kOrderEventTypes; ++t) total += rows.empty() ? 0 : rows[0].second.type_count[t];
+    for (int t = 0; t < book::kOrderEventTypes; ++t)
       std::printf(" %18.1f%%", total ? 100.0 * rows[0].second.type_count[t] / total : 0.0);
     std::printf("\n");
   }

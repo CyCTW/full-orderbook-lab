@@ -41,7 +41,8 @@ inline pcap::Capture load_capture(const std::vector<std::string>& paths) {
     }
     const std::size_t base = cap.bytes.size();
     if (base + part.bytes.size() > 0xFFFFFFFFull) throw std::runtime_error("combined captures exceed 4 GiB");
-    cap.bytes.insert(cap.bytes.end(), part.bytes.begin(), part.bytes.end());
+    cap.bytes.resize(base + part.bytes.size());
+    if (!part.bytes.empty()) std::memcpy(cap.bytes.data() + base, part.bytes.data(), part.bytes.size());
     for (auto d : part.datagrams) {
       d.offset += static_cast<std::uint32_t>(base);
       cap.datagrams.push_back(d);

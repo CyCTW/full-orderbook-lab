@@ -83,12 +83,15 @@ target_link_libraries(obl_gen PRIVATE obl)
 add_executable(obl_dump tools/dump.cpp)
 target_link_libraries(obl_dump PRIVATE obl)
 
+add_executable(obl_itch tools/itch.cpp)
+target_link_libraries(obl_itch PRIVATE obl)
+
 add_executable(obl_bench bench/bench.cpp)
 target_include_directories(obl_bench PRIVATE tools)
 target_link_libraries(obl_bench PRIVATE obl)
 
 enable_testing()
-foreach(t test_xdp test_book)
+foreach(t test_xdp test_book test_itch)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE obl)
   add_test(NAME ${t} COMMAND ${t})
