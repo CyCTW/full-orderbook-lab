@@ -10,15 +10,25 @@
 
 namespace obl::book {
 
-struct Order {
+// 32 bytes and 32-byte aligned: two nodes per cache line, never straddling
+// one. Side is packed into the low bit of the symbol word to get there.
+struct alignas(32) Order {
   OrderId id;
   Price price;
   Qty qty;
-  SymbolId symbol;
+  std::uint32_t sym_side;  // symbol << 1 | side
   std::uint32_t prev;
   std::uint32_t next;
-  Side side;
+
+  static constexpr SymbolId kMaxSymbol = 0x7FFFFFFF;
+
+  static Order make(OrderId id, SymbolId sym, Side side, Price price, Qty qty) {
+    return {id, price, qty, (sym << 1) | static_cast<std::uint32_t>(side), kNil, kNil};
+  }
+  Side side() const { return static_cast<Side>(sym_side & 1u); }
+  SymbolId symbol() const { return sym_side >> 1; }
 };
+static_assert(sizeof(Order) == 32);
 
 struct Level {
   Price price = 0;

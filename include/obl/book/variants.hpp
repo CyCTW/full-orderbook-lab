@@ -30,6 +30,8 @@ using VecBinaryBook = L3Book<BinaryVectorLevels, OA>;
 using SoaVecBook = L3Book<SoaVectorLevels, OA>;
 using ArrayStdBook = L3Book<DenseArrayLevels, StdOrderIndex>;
 using ArrayOpenBook = L3Book<DenseArrayLevels, OA>;
+using ArrayCompactBook = L3Book<DenseArrayLevels, CompactOrderIndex>;
+using VecLinearCompactBook = L3Book<LinearVectorLevels, CompactOrderIndex>;
 #ifdef OBL_HAVE_ABSEIL
 using BTreeOpenBook = L3Book<BTreeLevels, OA>;
 using ArrayAbslBook = L3Book<DenseArrayLevels, AbslOrderIndex>;
@@ -54,6 +56,8 @@ void for_each_variant(F&& f) {
   f.template operator()<ArrayOpenBook>();
   // order indexes (with the dense array)
   f.template operator()<ArrayStdBook>();
+  f.template operator()<ArrayCompactBook>();
+  f.template operator()<VecLinearCompactBook>();
 #ifdef OBL_HAVE_UNORDERED_DENSE
   f.template operator()<ArrayDenseBook>();
 #endif

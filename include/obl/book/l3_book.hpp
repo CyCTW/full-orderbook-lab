@@ -21,6 +21,7 @@ struct BookStats {
   std::uint64_t duplicate_add = 0;   // add with an id that is already live
   std::uint64_t over_execution = 0;  // executed quantity exceeded remaining quantity
   std::uint64_t level_missing = 0;   // internal inconsistency; must stay 0
+  std::uint64_t bad_symbol = 0;      // symbol id does not fit the packed order node
 };
 
 struct LevelView {
@@ -42,6 +43,12 @@ class L3Book {
 
   static std::string name() { return std::string(Bids::name) + " + " + Index::name; }
 
+  L3Book() {
+    if constexpr (requires(Index& ix, const OrderPool* p) { ix.attach(p); }) index_.attach(&pool_);
+  }
+  L3Book(const L3Book&) = delete;  // the index may hold a pointer to pool_
+  L3Book& operator=(const L3Book&) = delete;
+
   void reserve(std::size_t orders, std::size_t symbols) {
     pool_.reserve(orders);
     index_.reserve(orders);
@@ -55,13 +62,17 @@ class L3Book {
   }
 
   bool add(SymbolId sym, OrderId id, Side side, Price price, Qty qty) {
+    if (sym > Order::kMaxSymbol) {
+      ++stats_.bad_symbol;
+      return false;
+    }
     const std::uint32_t i = pool_.alloc();
+    pool_[i] = Order::make(id, sym, side, price, qty);  // before insert: compact indexes verify keys via the node
     if (!index_.insert(sym, id, i)) {
       pool_.release(i);
       ++stats_.duplicate_add;
       return false;
     }
-    pool_[i] = Order{id, price, qty, sym, kNil, kNil, side};
     link(book_for(sym), i);
     return true;
   }
@@ -94,7 +105,7 @@ class L3Book {
     }
     SymbolBook& b = books_[sym];
     const auto reduce = [&](Level& l) { l.qty -= executed; };
-    const bool ok = o.side == Side::Buy ? b.bids.update(o.price, reduce) : b.asks.update(o.price, reduce);
+    const bool ok = o.side() == Side::Buy ? b.bids.update(o.price, reduce) : b.asks.update(o.price, reduce);
     if (!ok) ++stats_.level_missing;
     o.qty -= executed;
     return true;
@@ -114,7 +125,7 @@ class L3Book {
     if (price == o.price && keep_priority) {
       const Qty old = o.qty;
       const auto resize = [&](Level& l) { l.qty = l.qty - old + qty; };
-      const bool ok = o.side == Side::Buy ? b.bids.update(price, resize) : b.asks.update(price, resize);
+      const bool ok = o.side() == Side::Buy ? b.bids.update(price, resize) : b.asks.update(price, resize);
       if (!ok) ++stats_.level_missing;
       o.qty = qty;
       return true;
@@ -225,14 +236,14 @@ class L3Book {
 
   void link(SymbolBook& b, std::uint32_t i) {
     const Order& o = pool_[i];
-    if (o.side == Side::Buy) level_push_back(b.bids.get_or_create(o.price), pool_, i);
+    if (o.side() == Side::Buy) level_push_back(b.bids.get_or_create(o.price), pool_, i);
     else level_push_back(b.asks.get_or_create(o.price), pool_, i);
   }
 
   void unlink(SymbolBook& b, std::uint32_t i) {
     const Order& o = pool_[i];
     const auto take_out = [&](Level& l) { level_unlink(l, pool_, i); };
-    const bool ok = o.side == Side::Buy ? b.bids.update(o.price, take_out) : b.asks.update(o.price, take_out);
+    const bool ok = o.side() == Side::Buy ? b.bids.update(o.price, take_out) : b.asks.update(o.price, take_out);
     if (!ok) ++stats_.level_missing;
   }
 

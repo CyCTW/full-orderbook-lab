@@ -197,7 +197,9 @@ void test_random_vs_reference(const RandomOpsConfig& c) {
   ReferenceBook ref;
   sim::Rng rng(c.seed);
   std::vector<std::pair<SymbolId, OrderId>> live;
-  OrderId next = 1;
+  // Per-symbol id counters: the same id value is live in several symbols at
+  // once (OMD-C ids are only unique per security).
+  OrderId next_id[3] = {1, 1, 1};
   for (SymbolId s = 0; s < 3; ++s) b.set_tick(s, c.tick);
   for (int n = 0; n < c.ops; ++n) {
     const SymbolId s = static_cast<SymbolId>(rng.below(3));
@@ -212,9 +214,10 @@ void test_random_vs_reference(const RandomOpsConfig& c) {
     if (op < 40) {
       const Side side = rng.chance(0.5) ? Side::Buy : Side::Sell;
       const Price p = price();
-      const bool a = b.add(s, next, side, p, q), r = ref.add(s, next, side, p, q);
+      const OrderId id = next_id[s]++;
+      const bool a = b.add(s, id, side, p, q), r = ref.add(s, id, side, p, q);
       CHECK_EQ(a, r);
-      live.push_back({s, next++});
+      live.push_back({s, id});
     } else {
       const std::size_t k = rng.below(live.size());
       const auto [ls, id] = live[k];
@@ -231,8 +234,9 @@ void test_random_vs_reference(const RandomOpsConfig& c) {
       } else if (op < 99) {
         const Side side = rng.chance(0.5) ? Side::Buy : Side::Sell;
         const Price p = price();
-        CHECK_EQ(b.replace(ls, id, next, side, p, q), ref.replace(ls, id, next, side, p, q));
-        live[k] = {ls, next++};
+        const OrderId nid = next_id[ls]++;
+        CHECK_EQ(b.replace(ls, id, nid, side, p, q), ref.replace(ls, id, nid, side, p, q));
+        live[k] = {ls, nid};
       } else {
         b.clear_symbol(ls);
         ref.clear_symbol(ls);
@@ -312,6 +316,12 @@ int main() {
     test_random_vs_reference<Book>({2, 20000, 3000, 10, 0.05});  // wide, off-tick prices
     test_random_vs_reference<Book>({3, 20000, 200000, 1, 0.0});  // beyond the dense window span
   });
+  // 4-bit fingerprints: almost every probe is a fingerprint collision, so the
+  // key verification against the order node is what keeps results correct.
+  using CollidingBook = L3Book<DenseArrayLevels, CompactOrderIndexT<4>>;
+  test_semantics<CollidingBook>();
+  test_random_vs_reference<CollidingBook>({4, 20000, 20, 1, 0.0});
+  test_random_vs_reference<CollidingBook>({5, 20000, 3000, 10, 0.05});
   test_generated_flow();
   return test_result("test_book");
 }
