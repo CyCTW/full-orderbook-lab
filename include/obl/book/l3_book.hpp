@@ -137,28 +137,20 @@ class L3Book {
       o.qty = qty;
       return true;
     }
-    unlink(b, i);
-    o.price = price;
-    o.qty = qty;
-    link(b, i);
+    requeue(b, i, price, qty);
     return true;
   }
 
+  // Replace reuses the order node in place: the index is re-keyed and the
+  // order is re-queued at the back of its (possibly new) price level. At an
+  // unchanged price the level is never erased and re-created.
   bool replace(SymbolId sym, OrderId old_id, OrderId new_id, Side side, Price price, Qty qty) {
-    const bool removed = remove(sym, old_id);
-    return add(sym, new_id, side, price, qty) && removed;
+    return replace_impl(sym, old_id, new_id, &side, price, qty);
   }
 
   // Replace without a side on the wire: the new order keeps the old order's side.
   bool replace(SymbolId sym, OrderId old_id, OrderId new_id, Price price, Qty qty) {
-    const std::uint32_t i = index_.find(sym, old_id);
-    if (i == kNil) {
-      ++stats_.unknown_order;
-      return false;
-    }
-    const Side side = pool_[i].side();
-    remove(sym, old_id);
-    return add(sym, new_id, side, price, qty);
+    return replace_impl(sym, old_id, new_id, nullptr, price, qty);
   }
 
   void clear_symbol(SymbolId sym) {
@@ -259,6 +251,50 @@ class L3Book {
   SymbolBook& book_for(SymbolId sym) {
     if (sym >= books_.size()) books_.resize(static_cast<std::size_t>(sym) + 1);
     return books_[sym];
+  }
+
+  bool replace_impl(SymbolId sym, OrderId old_id, OrderId new_id, const Side* side, Price price, Qty qty) {
+    const std::uint32_t i = index_.erase(sym, old_id);  // node still holds old_id (compact index verifies it)
+    if (i == kNil) {
+      ++stats_.unknown_order;
+      if (side) add(sym, new_id, *side, price, qty);
+      return false;
+    }
+    SymbolBook& b = books_[sym];
+    Order& o = pool_[i];
+    if (side && *side != o.side()) {  // side change: not an in-place operation
+      unlink(b, i);
+      pool_.release(i);
+      return add(sym, new_id, *side, price, qty);
+    }
+    o.id = new_id;  // re-key: the node must hold the new id before the index insert
+    if (!index_.insert(sym, new_id, i)) {
+      ++stats_.duplicate_add;
+      unlink(b, i);
+      pool_.release(i);
+      return false;
+    }
+    requeue(b, i, price, qty);
+    return true;
+  }
+
+  // Moves order i to the back of the queue at `price` with quantity `qty`.
+  void requeue(SymbolBook& b, std::uint32_t i, Price price, Qty qty) {
+    Order& o = pool_[i];
+    if (price == o.price) {
+      const auto move_back = [&](Level& l) {
+        queues_.unlink(l, pool_, i);
+        o.qty = qty;
+        queues_.push_back(l, pool_, i);
+      };
+      const bool ok = o.side() == Side::Buy ? b.bids.update(price, move_back) : b.asks.update(price, move_back);
+      if (!ok) ++stats_.level_missing;
+      return;
+    }
+    unlink(b, i);
+    o.price = price;
+    o.qty = qty;
+    link(b, i);
   }
 
   void link(SymbolBook& b, std::uint32_t i) {

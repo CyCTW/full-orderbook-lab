@@ -60,7 +60,10 @@ class VectorQueues {
     l.qty -= o.qty;
     --l.count;
     if (l.count == 0) {
-      release(l);  // the level container erases the level right after this
+      // The level container usually erases the level right after this, but a
+      // same-level requeue pushes into it again: it must not keep a freed id.
+      release(l);
+      l.head = kNil;
     } else if (q.dead >= kMinCompact && q.dead * 2 >= q.slots.size()) {
       compact(q, pool);
     }

@@ -38,7 +38,11 @@ class ArrayLevels {
     if (s < 0 && on_tick(p) && grow_to(p / tick_)) s = slot_of(p);
     if (s < 0) {
       auto [it, inserted] = overflow_.try_emplace(p);
-      if (inserted) it->second.price = p;
+      if (inserted) {
+        it->second.price = p;
+        ++diag_.overflow_levels_created;
+        if (!on_tick(p)) ++diag_.off_tick_levels;
+      }
       return it->second;
     }
     Level& l = slots_[s];
@@ -96,6 +100,13 @@ class ArrayLevels {
 
   std::size_t size() const { return window_levels_ + overflow_.size(); }
   std::size_t overflow_levels() const { return overflow_.size(); }
+
+  // Slow-path counters (diagnostics only).
+  struct Diag {
+    std::uint64_t grows = 0, grow_slots_copied = 0, overflow_levels_created = 0, off_tick_levels = 0;
+  };
+  const Diag& diag() const { return diag_; }
+  std::size_t window_span() const { return slots_.size(); }
 
   void clear() {
     slots_.clear();
@@ -191,6 +202,8 @@ class ArrayLevels {
       else new_hi = lo_ + MaxSpan;
       if (t < new_lo || t >= new_hi || new_hi - new_lo <= span()) return false;
     }
+    ++diag_.grows;
+    diag_.grow_slots_copied += slots_.size();
     const std::int64_t front = lo_ - new_lo;  // multiple of 64
     std::vector<Level> slots(static_cast<std::size_t>(new_hi - new_lo));
     std::vector<std::uint64_t> bits(slots.size() / 64, 0);
@@ -226,6 +239,7 @@ class ArrayLevels {
   std::int64_t best_ = -1;
   std::size_t window_levels_ = 0;
   std::map<Price, Level, Cmp> overflow_;
+  Diag diag_;
 };
 
 }  // namespace obl::book

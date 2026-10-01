@@ -259,6 +259,11 @@ int main(int argc, char** argv) {
     const double decode_ns = std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
     tools::print_decode_stats(st);
     std::printf("decode+record %.1f ns/msg\n", decode_ns / std::max<std::uint64_t>(1, st.messages));
+    if (args.has("save-events")) {
+      book::save_events(args.str("save-events", ""), events);
+      std::printf("saved events to %s\n", args.str("save-events", "").c_str());
+      if (args.has("only-save")) return 0;
+    }
   }
   std::size_t counts[16] = {};
   for (const auto& e : events) ++counts[static_cast<int>(e.type)];
