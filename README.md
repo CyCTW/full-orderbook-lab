@@ -241,10 +241,69 @@ Prefetch 距離掃描（dense_array）：k=1 只有部分效果；k=2–16 都�
 結論：**資料結構的最佳選擇取決於 book 的形狀**。合成資料（深 book、30 萬筆掛單）偏向 cache-miss 主導，
 真實樣本（淺 book、數千筆）偏向指令數主導。之後的實驗以真實資料為主，合成資料要先依上面的分佈校準。
 
+## 結果 5：熱門商品真實資料（Nasdaq TotalView-ITCH 5.0，2025-12-08）
+
+資料：`emi.nasdaq.com/ITCH/Nasdaq ITCH/S120825-v50.txt.gz`（8.8 GB，6.5 億筆訊息，0 筆長度不符）。
+取當天委託訊息最多的 20 檔：QQQ、NVDA、SPY、GOOGL、TSLA、GOOG、IWM、DIA、SOXL、SQQQ、TQQQ、NVDL、NFLX、PLTR、IVV、
+SOXX、VOO、FBTC、IBIT、AMD，共 9,519 萬筆事件；replay 後 0 unknown-order、0 crossed、收盤 book 清空。
+原始輸出：`results/2025-12-08_itch_top20.txt`（`--repeat 2 --prefetch 4 --latency`）。
+
+```bash
+./build/obl_itch data/itch/S120825-v50.txt.gz scan --top 25
+./build/obl_itch data/itch/S120825-v50.txt.gz extract --top 20 --out data/itch/top20.ev --profile 8000000
+./build/obl_bench --events data/itch/top20.ev --repeat 2 --prefetch 4 --latency
+```
+
+Book 形狀：同時約 **54 萬筆**掛單、每邊平均約 **1,900 個價位**（最多 7,400）、best 價位掛單數中位數 3–4；
+新單 45% 掛在 best、17% 在 10 分錢以外（3.4% 超過 2 美元）。事件：add 36.7% / delete 35.0% / **replace 25.7%** /
+execute 2.2% / cancel 0.4%。
+
+| variant | ns/event | prefetch k=4 | p50 | p99 | p99.9 |
+|---|---|---|---|---|---|
+| dense_array + ankerl::unordered_dense | **125.1** | 124.1 | 87 | 565 | 1250 |
+| dense_array + compact_fp(8B) | 130.5 | 141.1 | 107 | 516 | 1740 |
+| dense_array + absl::flat_hash_map | 134.4 | 129.7 | 118 | 527 | 1264 |
+| dense_array + open_addressing | 139.8 | **117.0** | 125 | 546 | 2856 |
+| dense_array + open_addressing + vector_queue | 170.6 | 132.3 | 136 | 653 | 3209 |
+| absl::btree_map + open_addressing | 193.9 | 157.8 | 207 | 713 | 3042 |
+| std::map(pool alloc) + open_addressing | 214.0 | 192.7 | 218 | 976 | 3655 |
+| std::map + open_addressing | 227.7 | 189.1 | 224 | 978 | 3924 |
+| sorted_vector(binary) + open_addressing | 236.8 | 193.7 | 218 | 946 | 3841 |
+| sorted_vector(linear) + open_addressing | 325.9 | 252.3 | 220 | 1877 | 6360 |
+| dense_array + unordered_map | 379.4 | 377.1 | 228 | 1497 | 5770 |
+| std::map + unordered_map | 464.4 | 459.2 | 377 | 1875 | 8948 |
+
+觀察：
+
+1. **名次再次翻轉**：深 book（每邊上千價位）時 **dense_array 最好**（O(1) 找價位，tick 已改成一分錢），
+   在淺的 NYSE 樣本上最好的 `sorted_vector(linear)` 在這裡掉到倒數（要線性掃過大量價位；replace 平均 683 ns，
+   因為新價位常離 best 很遠）。二分搜尋版本好很多（237 ns），B-tree 是樹狀結構裡最好的（194 ns）。
+2. **Index**：`ankerl::unordered_dense` 在這份資料最好（合成資料上反而最慢）；compact / absl / open addressing 差距在 10% 內；
+   `std::unordered_map` 仍慢約 3 倍。
+3. **Prefetch 在大資料上有效**：open addressing 搭配時快 15–25%（dense_array 140 → 117 ns，全場最快），
+   但對 compact（驗證 key 時仍要讀節點）、ankerl（沒有 prefetch API）幾乎無效。
+4. **vector_queue 仍然較慢**（171 vs 140 ns），結論與合成資料一致。
+5. 尾端延遲：dense_array 系列 p99 約 520–650 ns；std 容器 p99 約 1–1.9 µs、p99.9 達 4–9 µs。
+
+**三份資料的總結**：沒有單一最佳結構。
+
+| 資料 | 每邊價位 | 最佳 | 次佳 |
+|---|---|---|---|
+| NYSE 2019 樣本（ETF 為主、淺） | ~3.5 | sorted_vector(linear) 48 ns | sorted_vector_soa 51 ns |
+| 合成資料（深、30 萬掛單） | ~80 | dense_array + compact 111–122 ns | dense_array + OA 130–145 ns |
+| Nasdaq 熱門 20 檔（很深、54 萬掛單） | ~1,900 | dense_array + OA + prefetch 117 ns | dense_array + ankerl 125 ns |
+
+B-tree 兩邊都不是第一但都不差，是最「穩」的通用選擇；若要兩種情況都最快，下一步可以做混合結構
+（best 附近用小陣列/稠密視窗，遠端價位放 B-tree 或排序陣列）。
+注意：NYSE 樣本的 dense_array 是在 tick 修正前測的，需用一分錢 tick 重測。
+
 ## 下一步
 
 - [x] 取得真實 NYSE XDP 樣本驗證 layout 與分佈（結果 4）
-- [ ] dense_array 改用實際價格格點（例如從觀察到的價格推 tick，或 $1 以上用 $0.01）再重測
+- [x] dense_array 改用一分錢 tick（`--tick cent`，預設）
+- [x] 熱門商品真實資料：Nasdaq ITCH 熱門 20 檔（結果 5）
+- [ ] NYSE 樣本用一分錢 tick 重測 dense_array
+- [ ] 混合價位結構：best 附近稠密視窗 + 遠端 B-tree / 排序陣列
 - [ ] 依真實分佈校準產生器（價位數、best 掛單數、新單落點、事件比例）
 - [x] B-tree / SoA / pool-alloc levels、ankerl / absl index、prefetch、allocator × THP
 - [x] 減少 cache miss：order 節點 32 bytes、compact fingerprint index、prefetch 用的 `peek()`

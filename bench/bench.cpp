@@ -227,6 +227,7 @@ Result in_child(bool fork_enabled, F&& f) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  std::setvbuf(stdout, nullptr, _IOLBF, 0);  // rows appear as each variant finishes, even when redirected
   tools::Args args(argc, argv);
   if (args.positional().empty() && !args.has("events")) {
     std::puts("usage: obl_bench (FILE.pcap[.gz]... | --events FILE.ev) [--repeat N] [--latency] [--only SUBSTR] [--reserve N]\n"
