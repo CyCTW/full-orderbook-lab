@@ -1,0 +1,44 @@
+allocator: glibc (default)
+capture data/nyse_ibf/20190122.000000.010000.NYSE.IF.89_100.A.02.pcap.00001.gz (+20 more): 1436.2 MB, 13240492 frames, 13240492 UDP datagrams, 0 non-UDP, 0 truncated (18.69s)
+packets 13240492 (heartbeats 47833, duplicates 10, malformed 0), messages 14168972, gaps 0 (0 msgs missing), short msgs 0
+events 14138982: add 6744333, modify 570482, execute 66886, remove 6700041, replace 55724, clear 758  (decode+record 147.2 ns/msg)
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)     p50     p90     p99   p99.9      max  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                            87.5ns    91.9ns    11.43   119.3ns    91.3ns      95     143     248     541  2062659     11.6       0         0  701849944f44d081
+std::map + open_addressing                          65.3ns    66.6ns    15.32    99.4ns    85.8ns      75     120     218     450  2370711     11.3       0         0  701849944f44d081
+std::map(pool alloc) + open_addressing              62.2ns    63.5ns    16.08    92.5ns    76.6ns      71     110     194     419  1900129     11.4       0         0  701849944f44d081
+absl::btree_map + open_addressing                   54.7ns    56.0ns    18.28    89.3ns    71.4ns      69     110     205     453  4350228      5.3       0         0  701849944f44d081
+sorted_vector(linear) + open_addressing             48.2ns    49.0ns    20.73    76.9ns    63.1ns      61      97     173     385  2155345      5.6       0         0  701849944f44d081
+sorted_vector(binary) + open_addressing             59.3ns    60.2ns    16.85    85.6ns    70.2ns      67      98     159     359  1232966      5.6       0         0  701849944f44d081
+sorted_vector_soa(linear) + open_addressing         51.1ns    51.7ns    19.58    99.2ns    64.0ns      58      90     162     370  2942382     11.7       0         0  701849944f44d081
+dense_array + open_addressing                       90.0ns   146.9ns    11.11   120.1ns    93.0ns      68     130     393    1553 22392707    587.3       0         0  701849944f44d081
+dense_array + unordered_map                        110.1ns   142.5ns     9.08   241.3ns   110.6ns      90     162     424    1250 15298997    588.6       0         0  701849944f44d081
+dense_array + compact_fp(8B)                        81.6ns    93.5ns    12.26   158.5ns    99.3ns      66     121     368    1269 39987760    589.1       0         0  701849944f44d081
+sorted_vector(linear) + compact_fp(8B)              48.5ns    50.6ns    20.62    79.9ns    61.5ns      60      90     150     357  2058667      5.4       0         0  701849944f44d081
+dense_array + open_addressing + vector_queue        95.1ns   156.0ns    10.51   130.9ns   100.0ns      70     150     437    1737 40671731    590.2       0         0  701849944f44d081
+dense_array + compact_fp(8B) + vector_queue         95.7ns   101.7ns    10.45   120.2ns   106.3ns      66     130     403    1386 33688950    593.3       0         0  701849944f44d081
+sorted_vector(linear) + compact_fp(8B) + vector_queue    50.5ns    54.2ns    19.80    91.1ns    62.2ns      60      95     186     515 36902571      6.2       0         0  701849944f44d081
+dense_array + ankerl::unordered_dense               89.1ns   106.4ns    11.22   162.7ns    93.3ns      68     122     379    1281 44038387    591.7       0         0  701849944f44d081
+dense_array + absl::flat_hash_map                   95.4ns   110.0ns    10.48   181.8ns   104.3ns      69     126     367    1297 17130711    589.5       0         0  701849944f44d081
+
+per event type, ns (mean of lower 99.9% / p50 / p99), rdtsc overhead removed
+variant                                                          add              modify             execute              remove             replace
+std::map + unordered_map                              86/   78/  240      65/   61/  175     110/  103/  301      90/   87/  210     222/  209/  487
+std::map + open_addressing                            63/   57/  200      67/   62/  188      93/   85/  262      74/   69/  201     170/  157/  401
+std::map(pool alloc) + open_addressing                58/   53/  175      63/   59/  160      81/   74/  222      68/   64/  177     160/  149/  370
+absl::btree_map + open_addressing                     55/   50/  187      59/   54/  163      81/   71/  246      65/   60/  188     155/  143/  367
+sorted_vector(linear) + open_addressing               48/   44/  156      50/   47/  133      63/   56/  188      56/   51/  153     141/  130/  348
+sorted_vector(binary) + open_addressing               52/   49/  137      59/   56/  135      71/   67/  182      61/   58/  141     138/  131/  287
+sorted_vector_soa(linear) + open_addressing           46/   42/  146      46/   44/  120      57/   52/  172      53/   50/  142     130/  121/  306
+dense_array + open_addressing                         61/   49/  288      56/   50/  207      93/   70/  521      76/   59/  457     181/  140/  733
+dense_array + unordered_map                           91/   75/  355      56/   50/  213     113/   91/  551      94/   79/  467     248/  207/  836
+dense_array + compact_fp(8B)                          59/   48/  268      56/   49/  200      89/   69/  487      73/   58/  435     173/  133/  688
+sorted_vector(linear) + compact_fp(8B)                44/   41/  129      48/   44/  123      60/   54/  159      52/   50/  128     128/  120/  277
+dense_array + open_addressing + vector_queue          69/   54/  314      65/   53/  259     109/   83/  595      84/   62/  510     241/  191/  933
+dense_array + compact_fp(8B) + vector_queue           59/   48/  277      58/   49/  225      98/   74/  542      75/   56/  472     211/  160/  880
+sorted_vector(linear) + compact_fp(8B) + vector_queue      48/   45/  156      51/   48/  166      67/   59/  198      56/   51/  174     145/  130/  394
+dense_array + ankerl::unordered_dense                 54/   43/  267      55/   50/  207      96/   72/  509      79/   63/  450     185/  139/  807
+dense_array + absl::flat_hash_map                     71/   59/  289      49/   45/  187      84/   64/  478      69/   55/  419     194/  151/  712
+(event share)                                                  47.7%                4.0%                0.5%               47.4%                0.4%
+
+all variants agree on the final book (full depth + queue order)

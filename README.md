@@ -195,9 +195,57 @@ Prefetch 距離掃描（dense_array）：k=1 只有部分效果；k=2–16 都�
 
 保留 `VectorQueues` 作為對照。注意：真實行情最熱價位的掛單數可能遠少於合成資料，到時候結論可能不同，要用真實樣本重測。
 
+## 結果 4：真實資料（NYSE XDP 2019-01-22 樣本）
+
+資料：`ftp.nyse.com/Real Time Data Samples/NYSE XDP/NYSE_IBF/` 全部 21 個小時檔（channel 89–100、A 線，約 760 檔證券），
+依序串接處理：1,417 萬筆訊息，0 gap、0 malformed、0 短訊息、0 unknown-order、收盤後 book 清空。
+原始輸出：`results/2026-10-01_nyse_20190122_real.txt`（`--repeat 3 --prefetch 4 --latency`）。
+
+```bash
+./build/obl_dump  data/nyse_ibf/*.gz --profile 1000000   # book 形狀、crossed/locked、新單落點分佈
+./build/obl_bench data/nyse_ibf/*.gz --repeat 3 --prefetch 4 --latency
+```
+
+**真實資料抓到的 bug**：這個版本的 feed 中，所有 Replace 的 side byte、所有 Modify 的 PositionChange/side 都是 0。
+原本 decoder 把非 `'S'` 一律當 Buy，被 replace 的賣單變成買單，30–50 檔證券整天 crossed。
+修正：Replace 沒有 side 時沿用原委託的 side；Modify 依交易所規則判斷優先權（價格不變且數量沒增加才保留）。修正後 0 crossed。
+
+**真實 book 的形狀**（`--profile`）：同時掛單約 3–4.6k 筆、約 320 檔有掛單、每邊平均 3.5 個價位、
+最佳價位掛單數中位數 1（p99 約 10）；新單 56% 掛在 best、23% 改善 best、12% 在 1 cent 外。
+事件比例 add 47.7% / delete 47.4% / modify 4.0% / execution 0.5% / replace 0.4%。
+
+| variant | ns/event | prefetch k=4 | dRSS MB |
+|---|---|---|---|
+| sorted_vector(linear) + open_addressing | **48.2** | 63.1 | 5.6 |
+| sorted_vector(linear) + compact_fp | **48.5** | 61.5 | 5.4 |
+| sorted_vector(linear) + compact_fp + vector_queue | 50.5 | 62.2 | 6 |
+| sorted_vector_soa(linear) + open_addressing | 51.1 | 64.0 | 11.7 |
+| absl::btree_map + open_addressing | 54.7 | 71.4 | 5.3 |
+| sorted_vector(binary) + open_addressing | 59.3 | 70.2 | 5.6 |
+| std::map(pool alloc) + open_addressing | 62.2 | 76.6 | 11.4 |
+| std::map + open_addressing | 65.3 | 85.8 | 11.3 |
+| dense_array + compact_fp | 81.6 | 99.3 | 589 |
+| std::map + unordered_map | 87.5 | 91.3 | 11.6 |
+| dense_array + open_addressing | 90.0 | 93.0 | 587 |
+
+與合成資料的結論比較：
+
+1. **整體快 2–4 倍**：真實 book 很小（數千筆掛單），幾乎全在 cache 裡，cache miss 不再是主角。
+2. **名次翻轉**：sorted_vector(linear) 最好（每邊只有 ~3.5 個價位，線性掃描幾乎一步到位）；
+   **dense_array 變最差之一、RSS 590 MB**——因為用 symbol mapping 的 MPV 當 tick：價格 scale 6、MPV=100 表示 $0.0001，
+   但 $1 以上實際價格格點是 $0.01（100 倍），陣列變得很稀疏、視窗不停擴張，對 cache 很不友善。這是 tick 設定問題，不是結構本身。
+3. **Prefetch 反而變慢 25–30%**：資料已在 cache，prefetch 只剩額外的 index 查找成本。
+4. **Index 差異縮小**：compact 與 open addressing 打平（index 很小），`std::unordered_map` 仍明顯較慢。
+5. **vector_queue 與 list 打平**：最佳價位通常只有 1 筆，佇列結構幾乎無影響。
+
+結論：**資料結構的最佳選擇取決於 book 的形狀**。合成資料（深 book、30 萬筆掛單）偏向 cache-miss 主導，
+真實樣本（淺 book、數千筆）偏向指令數主導。之後的實驗以真實資料為主，合成資料要先依上面的分佈校準。
+
 ## 下一步
 
-- [ ] 取得真實 NYSE XDP 樣本驗證 layout 與分佈
+- [x] 取得真實 NYSE XDP 樣本驗證 layout 與分佈（結果 4）
+- [ ] dense_array 改用實際價格格點（例如從觀察到的價格推 tick，或 $1 以上用 $0.01）再重測
+- [ ] 依真實分佈校準產生器（價位數、best 掛單數、新單落點、事件比例）
 - [x] B-tree / SoA / pool-alloc levels、ankerl / absl index、prefetch、allocator × THP
 - [x] 減少 cache miss：order 節點 32 bytes、compact fingerprint index、prefetch 用的 `peek()`
 - [x] 每種事件類型分開量測（rdtsc，`--latency`）
