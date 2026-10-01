@@ -1,0 +1,127 @@
+THP mode: always [madvise] never
+
+################ glibc
+allocator: glibc (default)
+capture data/synth_5m.pcap: 261.9 MB, 1250730 frames, 1250730 UDP datagrams, 0 non-UDP, 0 truncated (0.32s)
+packets 1250730 (heartbeats 0, duplicates 0, malformed 0), messages 5000301, gaps 0 (0 msgs missing), short msgs 0
+events 5000300: add 2342906, modify 336557, execute 240209, remove 1840287, replace 240032, clear 9  (decode+record 42.6 ns/msg)
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                           349.6ns   366.2ns     2.86   492.5ns   315.2ns     47.4       0    299181  01cac4a4236cf11f
+std::map + open_addressing                         174.5ns   192.1ns     5.73   214.2ns   129.5ns     64.1       0    299181  01cac4a4236cf11f
+std::map(pool alloc) + open_addressing             173.8ns   189.9ns     5.75   265.8ns   143.4ns     53.2       0    299181  01cac4a4236cf11f
+absl::btree_map + open_addressing                  164.5ns   180.2ns     6.08   239.2ns   124.4ns     54.9       0    299181  01cac4a4236cf11f
+sorted_vector(linear) + open_addressing            147.2ns   153.5ns     6.79   215.3ns   102.8ns     37.3       0    299181  01cac4a4236cf11f
+sorted_vector(binary) + open_addressing            174.7ns   180.9ns     5.72   235.9ns   112.3ns     37.3       0    299181  01cac4a4236cf11f
+sorted_vector_soa(linear) + open_addressing        149.7ns   166.4ns     6.68   217.8ns   102.6ns     74.0       0    299181  01cac4a4236cf11f
+dense_array + open_addressing                      143.5ns   157.9ns     6.97   213.7ns   104.1ns    132.4       0    299181  01cac4a4236cf11f
+dense_array + unordered_map                        337.6ns   344.4ns     2.96   479.2ns   292.4ns    121.0       0    299181  01cac4a4236cf11f
+dense_array + ankerl::unordered_dense              196.6ns   206.7ns     5.09   245.1ns   138.4ns    124.4       0    299181  01cac4a4236cf11f
+dense_array + absl::flat_hash_map                  149.5ns   177.2ns     6.69   223.1ns   109.0ns    122.0       0    299181  01cac4a4236cf11f
+
+all variants agree on the final book (full depth + queue order)
+
+################ glibc + THP
+allocator: glibc (default)
+capture data/synth_5m.pcap: 261.9 MB, 1250730 frames, 1250730 UDP datagrams, 0 non-UDP, 0 truncated (1.92s)
+packets 1250730 (heartbeats 0, duplicates 0, malformed 0), messages 5000301, gaps 0 (0 msgs missing), short msgs 0
+events 5000300: add 2342906, modify 336557, execute 240209, remove 1840287, replace 240032, clear 9  (decode+record 277.7 ns/msg)
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                           346.0ns   382.3ns     2.89   446.9ns   292.8ns     49.6     516    299181  01cac4a4236cf11f
+std::map + open_addressing                         159.0ns   165.1ns     6.29   188.7ns   129.2ns     65.6     532    299181  01cac4a4236cf11f
+std::map(pool alloc) + open_addressing             175.2ns   188.2ns     5.71   243.0ns   132.9ns     55.6     522    299181  01cac4a4236cf11f
+absl::btree_map + open_addressing                  145.7ns   160.2ns     6.87   209.2ns   114.1ns     55.6     522    299181  01cac4a4236cf11f
+sorted_vector(linear) + open_addressing            133.2ns   145.4ns     7.51   213.7ns    97.1ns     39.6     506    299181  01cac4a4236cf11f
+sorted_vector(binary) + open_addressing            150.1ns   152.8ns     6.66   220.9ns   118.2ns     39.6     506    299181  01cac4a4236cf11f
+sorted_vector_soa(linear) + open_addressing        129.1ns   144.7ns     7.75   181.1ns   104.7ns     55.6     522    299181  01cac4a4236cf11f
+dense_array + open_addressing                      130.5ns   137.3ns     7.66   187.8ns    94.7ns    133.5     600    299181  01cac4a4236cf11f
+dense_array + unordered_map                        308.0ns   344.8ns     3.25   380.2ns   272.4ns    123.5     590    299181  01cac4a4236cf11f
+dense_array + ankerl::unordered_dense              172.7ns   187.3ns     5.79   217.2ns   135.1ns    129.3     596    299181  01cac4a4236cf11f
+dense_array + absl::flat_hash_map                  144.5ns   152.8ns     6.92   173.4ns    98.1ns    125.6     592    299181  01cac4a4236cf11f
+
+all variants agree on the final book (full depth + queue order)
+
+################ jemalloc
+allocator: /usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+capture data/synth_5m.pcap: 261.9 MB, 1250730 frames, 1250730 UDP datagrams, 0 non-UDP, 0 truncated (0.33s)
+packets 1250730 (heartbeats 0, duplicates 0, malformed 0), messages 5000301, gaps 0 (0 msgs missing), short msgs 0
+events 5000300: add 2342906, modify 336557, execute 240209, remove 1840287, replace 240032, clear 9  (decode+record 40.0 ns/msg)
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                           337.8ns   370.7ns     2.96   493.0ns   292.8ns     32.1       0    299181  01cac4a4236cf11f
+std::map + open_addressing                         168.1ns   174.1ns     5.95   211.0ns   144.8ns     33.2       0    299181  01cac4a4236cf11f
+std::map(pool alloc) + open_addressing             182.1ns   193.2ns     5.49   223.5ns   129.9ns     37.4       0    299181  01cac4a4236cf11f
+absl::btree_map + open_addressing                  148.8ns   154.2ns     6.72   202.5ns   113.9ns     33.7       0    299181  01cac4a4236cf11f
+sorted_vector(linear) + open_addressing            141.4ns   147.9ns     7.07   197.0ns   102.7ns     28.1       0    299181  01cac4a4236cf11f
+sorted_vector(binary) + open_addressing            159.9ns   164.0ns     6.25   248.7ns   104.5ns     28.1       0    299181  01cac4a4236cf11f
+sorted_vector_soa(linear) + open_addressing        145.7ns   149.4ns     6.86   181.7ns   101.5ns     33.4       0    299181  01cac4a4236cf11f
+dense_array + open_addressing                      140.1ns   164.6ns     7.14   205.3ns   106.5ns    115.8       0    299181  01cac4a4236cf11f
+dense_array + unordered_map                        271.1ns   317.9ns     3.69   402.1ns   265.0ns    121.4       0    299181  01cac4a4236cf11f
+dense_array + ankerl::unordered_dense              172.6ns   208.9ns     5.79   229.7ns   146.7ns    113.4       0    299181  01cac4a4236cf11f
+dense_array + absl::flat_hash_map                  149.2ns   163.0ns     6.70   249.1ns   127.4ns    112.8       0    299181  01cac4a4236cf11f
+
+all variants agree on the final book (full depth + queue order)
+
+################ jemalloc + THP
+allocator: /usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+capture data/synth_5m.pcap: 261.9 MB, 1250730 frames, 1250730 UDP datagrams, 0 non-UDP, 0 truncated (2.73s)
+packets 1250730 (heartbeats 0, duplicates 0, malformed 0), messages 5000301, gaps 0 (0 msgs missing), short msgs 0
+events 5000300: add 2342906, modify 336557, execute 240209, remove 1840287, replace 240032, clear 9  (decode+record 312.4 ns/msg)
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                           360.4ns   400.6ns     2.77   442.9ns   284.8ns     33.1     492    299181  01cac4a4236cf11f
+std::map + open_addressing                         165.4ns   172.5ns     6.05   197.4ns   136.3ns     31.1     508    299181  01cac4a4236cf11f
+std::map(pool alloc) + open_addressing             165.5ns   176.3ns     6.04   209.6ns   138.5ns     40.6     510    299181  01cac4a4236cf11f
+absl::btree_map + open_addressing                  148.3ns   156.5ns     6.74   196.4ns   118.4ns     36.5     504    299181  01cac4a4236cf11f
+sorted_vector(linear) + open_addressing            153.1ns   156.1ns     6.53   178.7ns   100.7ns     30.5     508    299181  01cac4a4236cf11f
+sorted_vector(binary) + open_addressing            154.9ns   174.5ns     6.45   203.4ns   122.0ns     30.5     508    299181  01cac4a4236cf11f
+sorted_vector_soa(linear) + open_addressing        139.6ns   158.7ns     7.16   211.0ns   111.1ns     35.8     504    299181  01cac4a4236cf11f
+dense_array + open_addressing                      139.1ns   164.2ns     7.19   217.7ns   105.4ns    116.9     566    299181  01cac4a4236cf11f
+dense_array + unordered_map                        369.7ns   414.8ns     2.71   643.5ns   338.8ns    120.1     532    299181  01cac4a4236cf11f
+dense_array + ankerl::unordered_dense              201.0ns   228.4ns     4.97   250.9ns   163.8ns    113.4     554    299181  01cac4a4236cf11f
+dense_array + absl::flat_hash_map                  130.3ns   181.0ns     7.68   202.0ns   104.9ns    115.3     552    299181  01cac4a4236cf11f
+
+all variants agree on the final book (full depth + queue order)
+
+################ mimalloc
+allocator: /home/user/full-orderbook-lab/build/lib/libmimalloc.so
+capture data/synth_5m.pcap: 261.9 MB, 1250730 frames, 1250730 UDP datagrams, 0 non-UDP, 0 truncated (0.34s)
+packets 1250730 (heartbeats 0, duplicates 0, malformed 0), messages 5000301, gaps 0 (0 msgs missing), short msgs 0
+events 5000300: add 2342906, modify 336557, execute 240209, remove 1840287, replace 240032, clear 9  (decode+record 53.5 ns/msg)
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                           368.2ns   399.7ns     2.72   442.8ns   310.5ns    -13.3      56    299181  01cac4a4236cf11f
+std::map + open_addressing                         162.8ns   185.9ns     6.14   222.6ns   128.2ns     -5.0      64    299181  01cac4a4236cf11f
+std::map(pool alloc) + open_addressing             161.6ns   168.0ns     6.19   210.1ns   129.6ns     28.6      62    299181  01cac4a4236cf11f
+absl::btree_map + open_addressing                  143.8ns   161.8ns     6.95   224.1ns   113.3ns     18.5      76    299181  01cac4a4236cf11f
+sorted_vector(linear) + open_addressing            146.1ns   159.8ns     6.84   236.1ns    99.1ns     18.5      76    299181  01cac4a4236cf11f
+sorted_vector(binary) + open_addressing            158.5ns   168.6ns     6.31   205.6ns   113.6ns     18.5      76    299181  01cac4a4236cf11f
+sorted_vector_soa(linear) + open_addressing        146.2ns   151.7ns     6.84   211.3ns   100.6ns     18.5      62    299181  01cac4a4236cf11f
+dense_array + open_addressing                      146.3ns   157.3ns     6.83   207.6ns   102.5ns    111.3     146    299181  01cac4a4236cf11f
+dense_array + unordered_map                        370.9ns   390.5ns     2.70   391.3ns   267.2ns     97.9     148    299181  01cac4a4236cf11f
+dense_array + ankerl::unordered_dense              194.4ns   222.7ns     5.14   263.1ns   152.8ns    107.4     132    299181  01cac4a4236cf11f
+dense_array + absl::flat_hash_map                  173.1ns   179.7ns     5.78   194.6ns   103.5ns    108.6     146    299181  01cac4a4236cf11f
+
+all variants agree on the final book (full depth + queue order)
+
+################ mimalloc + THP
+allocator: /home/user/full-orderbook-lab/build/lib/libmimalloc.so
+capture data/synth_5m.pcap: 261.9 MB, 1250730 frames, 1250730 UDP datagrams, 0 non-UDP, 0 truncated (0.25s)
+packets 1250730 (heartbeats 0, duplicates 0, malformed 0), messages 5000301, gaps 0 (0 msgs missing), short msgs 0
+events 5000300: add 2342906, modify 336557, execute 240209, remove 1840287, replace 240032, clear 9  (decode+record 40.0 ns/msg)
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)  dRSS MB  THP MB    orders  checksum
+std::map + unordered_map                           358.8ns   380.2ns     2.79   452.7ns   293.4ns    -13.5      58    299181  01cac4a4236cf11f
+std::map + open_addressing                         154.1ns   181.5ns     6.49   227.5ns   127.7ns     -5.0      64    299181  01cac4a4236cf11f
+std::map(pool alloc) + open_addressing             147.3ns   180.8ns     6.79   222.5ns   133.0ns     28.6      62    299181  01cac4a4236cf11f
+absl::btree_map + open_addressing                  158.7ns   168.4ns     6.30   232.6ns   118.7ns     18.5      76    299181  01cac4a4236cf11f
+sorted_vector(linear) + open_addressing            143.3ns   180.0ns     6.98   202.4ns   113.1ns     18.4      76    299181  01cac4a4236cf11f
+sorted_vector(binary) + open_addressing            154.6ns   172.3ns     6.47   202.4ns   114.3ns     18.4      76    299181  01cac4a4236cf11f
+sorted_vector_soa(linear) + open_addressing        149.7ns   162.0ns     6.68   176.8ns   100.3ns     18.4      62    299181  01cac4a4236cf11f
+dense_array + open_addressing                      133.7ns   143.2ns     7.48   181.9ns   100.7ns    111.3     146    299181  01cac4a4236cf11f
+dense_array + unordered_map                        309.1ns   365.3ns     3.24   408.9ns   250.0ns     93.2     120    299181  01cac4a4236cf11f
+dense_array + ankerl::unordered_dense              162.2ns   194.4ns     6.17   251.0ns   132.7ns    107.4     132    299181  01cac4a4236cf11f
+dense_array + absl::flat_hash_map                  149.2ns   203.7ns     6.70   218.1ns   111.7ns    108.5     146    299181  01cac4a4236cf11f
+
+all variants agree on the final book (full depth + queue order)

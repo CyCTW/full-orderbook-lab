@@ -106,25 +106,53 @@ CMake 會用 FetchContent 抓 abseil（20260526.0）、ankerl::unordered_dense�
 - OrderID 不連續（模擬 OMD-C）；modify 有保留/失去排隊位置兩種（PositionChange）
 - 生成器自帶 shadow book，測試會驗證所有訊息都引用存在的委託
 
-## 初步結果
+## 結果（2026-10-01，合成資料）
 
-合成資料 5M 訊息、300 symbols、結束時約 30 萬筆掛單；4 vCPU Xeon @ 2.1GHz VM（有雜訊，重跑差 10–20%）：
+5M 訊息、300 symbols、結束時約 30 萬筆掛單；4 vCPU Xeon @ 2.1GHz 雲端 VM。
+**同一設定重跑差 10–15%**，以下只把超出雜訊的差異當結論。完整輸出：`results/2026-10-01_alloc_sweep_synth5m.txt`
+（`--repeat 5 --prefetch 4`，6 種 allocator 設定 × 11 變體，所有變體 checksum 一致）。
 
-| variant | ns/event (best of 3) | e2e ns/msg | p50 / p99 / p99.9 (ns) |
+glibc（無 THP）的 best-of-5，ns/event：
+
+| variant | 一般 replay | prefetch k=4 | dRSS MB |
 |---|---|---|---|
-| std::map + unordered_map | 378 | 504 | 617 / 1799 / 18029 |
-| std::map + open_addressing | 181 | 266 | 257 / 839 / 5561 |
-| sorted_vector(linear) + open_addressing | 169 | 246 | 227 / 670 / 5242 |
-| sorted_vector(binary) + open_addressing | 163 | 233 | 235 / 660 / 4596 |
-| dense_array + unordered_map | 325 | 439 | 413 / 1198 / 14746 |
-| dense_array + open_addressing | 149 | 184 | 166 / 582 / 6004 |
+| std::map + unordered_map | 350 | 315 | 47 |
+| std::map + open_addressing | 175 | 130 | 64 |
+| std::map(pool alloc) + open_addressing | 174 | 143 | 53 |
+| absl::btree_map + open_addressing | 165 | 124 | 55 |
+| sorted_vector(linear) + open_addressing | 147 | 103 | 37 |
+| sorted_vector(binary) + open_addressing | 175 | 112 | 37 |
+| sorted_vector_soa(linear) + open_addressing | 150 | 103 | 74 |
+| dense_array + open_addressing | 144 | 104 | 132 |
+| dense_array + unordered_map | 338 | 292 | 121 |
+| dense_array + ankerl::unordered_dense | 197 | 138 | 124 |
+| dense_array + absl::flat_hash_map | 150 | 109 | 122 |
 
-觀察：order index 是最大的單一因素（std::unordered_map → open addressing 約快 2 倍）；
-價位容器之間差距較小，因為隨機刪單造成的 order/index cache miss 主導成本。
+觀察：
+
+1. **Order index 影響最大**：`std::unordered_map` 比 open addressing / absl 慢約 2 倍；
+   ankerl 慢 20–30%（value 存在獨立 dense 陣列，erase 要搬最後一筆，多一次 cache miss）。
+   自寫 open addressing 與 absl Swiss table 在雜訊內打平。
+2. **Software prefetch 是這輪最大的單一改善**：k=4 在所有變體都快 25–30%，因為成本主要是 order/index 的 cache miss，
+   而封包內多筆訊息讓 handler 本來就能往前看。
+3. **價位容器之間差距小（~15%）**：線性搜尋的 sorted vector 與 dense array 最好；B-tree 比紅黑樹好約 5–10%；
+   SoA 與一般 sorted vector 在這個資料（每邊約 50–100 個價位、活動集中在 best 附近）沒有可量測差異；
+   二分搜尋比線性慢，因為要找的價位幾乎都在尾端附近。
+4. **Allocator 幾乎沒差**：hot path（order pool + open addressing）本來就不 malloc，只有 map node 會配置；
+   glibc / jemalloc / mimalloc 的差異都在雜訊內。pool allocator 對 std::map 也沒有可量測改善。
+   記憶體方面 jemalloc 的 RSS 最低（vector 類 28 MB vs glibc 37 MB）。
+5. **Transparent huge pages**：glibc + THP（`GLIBC_TUNABLES=glibc.malloc.hugetlb=1`，確認有 ~500 MB 落在 huge page）
+   讓多數變體快 5–10%（TLB miss 減少），接近雜訊上緣；jemalloc/mimalloc 開 THP 無一致差異。
+   （mimalloc 的 dRSS 出現負值是因為它會歸還前一輪釋放的記憶體，該欄不可直接比較。）
+
+結論：目前最佳組合是 **dense_array 或 sorted_vector(linear) + open addressing + prefetch + THP**，約 95–100 ns/event。
+下一步要再往下壓，重點在減少每筆事件的 cache miss 數（order 節點與 index 合併、per-symbol 小 index 等），而不是換 allocator。
 
 ## 下一步
 
 - [ ] 取得真實 NYSE XDP 樣本驗證 layout 與分佈
-- [ ] 更多變體：B-tree levels、order 節點內嵌 level 指標、per-symbol index、huge pages / prefetch
+- [x] B-tree / SoA / pool-alloc levels、ankerl / absl index、prefetch、allocator × THP
+- [ ] 減少 cache miss：index 直接存 order（省一次跳轉）、per-symbol index、order 節點縮小到 32 bytes
+- [ ] 在較安靜的機器（isolcpus / 固定頻率）重跑，降低雜訊
 - [ ] 量測拆解：perf counters（cache miss / branch miss）per event type
 - [ ] OMD-C SF adapter（30/31/32/33/34/50…）
