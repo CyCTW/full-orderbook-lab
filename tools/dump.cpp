@@ -75,7 +75,7 @@ struct Profiler : xdp::BookAdapter<book::MapStdBook> {
   std::uint64_t dist_hist[9] = {};  // improve, 0, 1, 2, 3-5, 6-10, 11-50, 51-200, >200 (cents from same-side best)
   std::uint64_t no_best = 0;
 
-  Profiler(book::MapStdBook& bk, std::uint64_t k, Price u, bool mpv) : Base(bk, mpv), b(bk), every(k), unit(u) {
+  Profiler(book::MapStdBook& bk, std::uint64_t k, Price u, xdp::TickPolicy tick) : Base(bk, tick), b(bk), every(k), unit(u) {
     std::printf("%10s %9s %7s %13s %13s %15s %8s %7s\n", "msgs", "orders", "syms", "lvls/side avg", "lvls/side max",
                 "best-lvl orders", "crossed", "locked");
   }
@@ -157,11 +157,11 @@ int main(int argc, char** argv) {
   book::MapStdBook book;
   xdp::DecodeStats st;
   if (const auto every = args.u64("profile", 0)) {
-    Profiler prof(book, every, static_cast<Price>(args.u64("cent", 10000)), opt.tick_from_mpv);
+    Profiler prof(book, every, static_cast<Price>(args.u64("cent", 10000)), opt.tick);
     st = tools::decode_capture(cap, opt, prof);
     prof.print_hist();
   } else {
-    xdp::BookAdapter<book::MapStdBook> adapter(book, opt.tick_from_mpv);
+    xdp::BookAdapter<book::MapStdBook> adapter(book, opt.tick);
     st = tools::decode_capture(cap, opt, adapter);
   }
   tools::print_decode_stats(st);

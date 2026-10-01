@@ -1,7 +1,7 @@
 // obl_bench: compare L3 book data structures on a captured / synthetic feed.
 //
 //   obl_bench FILE.pcap[.gz] [--repeat 3] [--latency] [--only SUBSTR] [--reserve N]
-//                            [--prefetch K] [--port P] [--key-by-group] [--no-mpv-tick] [--no-fork]
+//                            [--prefetch K] [--port P] [--key-by-group] [--tick cent|mpv|none] [--no-fork]
 //
 // The capture is decoded once into feed-neutral events; each variant then
 // replays the same events. Every variant runs in a forked child so it starts
@@ -191,7 +191,7 @@ Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& 
   {  // end to end: arbitration + decode + book, straight from the packets
     auto b = std::make_unique<Book>();
     if (reserve) b->reserve(reserve, 1 << 16);
-    xdp::BookAdapter<Book> adapter(*b, opt.tick_from_mpv);
+    xdp::BookAdapter<Book> adapter(*b, opt.tick);
     const auto t0 = Clock::now();
     const auto st = tools::decode_capture(cap, opt, adapter);
     const double ns = std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
   tools::Args args(argc, argv);
   if (args.positional().empty()) {
     std::puts("usage: obl_bench FILE.pcap[.gz]... [--repeat N] [--latency] [--only SUBSTR] [--reserve N]\n"
-              "                 [--prefetch K] [--port P] [--key-by-group] [--no-mpv-tick] [--no-fork]");
+              "                 [--prefetch K] [--port P] [--key-by-group] [--tick cent|mpv|none] [--no-fork]");
     return 1;
   }
   const tools::FeedOptions opt(args);
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
 
   std::vector<book::Event> events;
   events.reserve(cap.datagrams.size() * 8);
-  xdp::EventRecorder rec(events, opt.tick_from_mpv);
+  xdp::EventRecorder rec(events, opt.tick);
   const auto t0 = Clock::now();
   const auto st = tools::decode_capture(cap, opt, rec);
   const double decode_ns = std::chrono::duration<double, std::nano>(Clock::now() - t0).count();

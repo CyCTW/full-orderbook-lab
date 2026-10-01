@@ -219,6 +219,28 @@ inline std::size_t encode(std::uint8_t* p, const SymbolIndexMapping& m) {
   return kSymbolIndexMappingSize;
 }
 
+// Price grid hint for books that index levels by tick (dense array).
+//   Cent: one cent, 10^(PriceScaleCode-2) price units. US equities >= $1 trade
+//         on a $0.01 grid; sub-penny prices are still handled (overflow path).
+//   Mpv:  the mapping's MPV field. In the 2019 NYSE samples MPV is 100 at
+//         scale 6, i.e. $0.0001: 100x finer than the real grid above $1.
+//   None: leave the book's default (1 price unit).
+enum class TickPolicy { Cent, Mpv, None };
+
+inline Price tick_for(const SymbolIndexMapping& m, TickPolicy policy) {
+  switch (policy) {
+    case TickPolicy::Cent: {
+      if (m.price_scale_code < 2 || m.price_scale_code > 18) return m.mpv;
+      Price t = 1;
+      for (int i = 2; i < m.price_scale_code; ++i) t *= 10;
+      return t;
+    }
+    case TickPolicy::Mpv: return m.mpv;
+    case TickPolicy::None: return 0;
+  }
+  return 0;
+}
+
 // ---------------------------------------------------------------- 32: Symbol Clear
 // SourceTime u32 @4 | SourceTimeNS u32 @8 | SymbolIndex u32 @12 | NextSourceSeqNum u32 @16
 struct SymbolClear {

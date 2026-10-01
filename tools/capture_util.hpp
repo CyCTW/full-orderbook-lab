@@ -16,12 +16,13 @@ namespace obl::tools {
 struct FeedOptions {
   int port = -1;              // only this UDP destination port (-1 = all)
   bool key_by_group = false;  // sequence-track per group:port instead of per port
-  bool tick_from_mpv = true;
+  xdp::TickPolicy tick = xdp::TickPolicy::Cent;
 
   explicit FeedOptions(const Args& a) {
     port = static_cast<int>(a.num("port", -1));
     key_by_group = a.has("key-by-group");
-    tick_from_mpv = !a.has("no-mpv-tick");
+    const std::string t = a.str("tick", "cent");
+    tick = t == "mpv" ? xdp::TickPolicy::Mpv : t == "none" ? xdp::TickPolicy::None : xdp::TickPolicy::Cent;
   }
 
   bool accept(const pcap::Datagram& d) const { return port < 0 || d.dst_port == port; }

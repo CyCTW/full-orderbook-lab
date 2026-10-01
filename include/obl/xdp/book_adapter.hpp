@@ -9,10 +9,10 @@ namespace obl::xdp {
 template <class Book>
 class BookAdapter : public NullVisitor {
  public:
-  explicit BookAdapter(Book& book, bool tick_from_mpv = true) : book_(book), tick_from_mpv_(tick_from_mpv) {}
+  explicit BookAdapter(Book& book, TickPolicy tick = TickPolicy::Cent) : book_(book), tick_(tick) {}
 
   void on_symbol_mapping(const SymbolIndexMapping& m) {
-    if (tick_from_mpv_ && m.mpv > 0) book_.set_tick(m.symbol_index, m.mpv);
+    if (const Price t = tick_for(m, tick_); t > 0) book_.set_tick(m.symbol_index, t);
   }
   void on_symbol_clear(const SymbolClear& m) { book_.clear_symbol(m.symbol_index); }
   void on_add(const AddOrder& m) { book_.add(m.symbol_index, m.order_id, m.side, m.price, m.volume); }
@@ -28,7 +28,7 @@ class BookAdapter : public NullVisitor {
 
  private:
   Book& book_;
-  bool tick_from_mpv_;
+  TickPolicy tick_;
 };
 
 }  // namespace obl::xdp

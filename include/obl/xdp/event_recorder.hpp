@@ -13,11 +13,11 @@ class EventRecorder : public NullVisitor {
   using Event = book::Event;
   using T = book::EventType;
 
-  explicit EventRecorder(std::vector<Event>& out, bool tick_from_mpv = true)
-      : out_(out), tick_from_mpv_(tick_from_mpv) {}
+  explicit EventRecorder(std::vector<Event>& out, TickPolicy tick = TickPolicy::Cent) : out_(out), tick_(tick) {}
 
   void on_symbol_mapping(const SymbolIndexMapping& m) {
-    if (tick_from_mpv_ && m.mpv > 0) out_.push_back({T::SetTick, Side::Buy, false, true, m.symbol_index, 0, 0, m.mpv, 0});
+    if (const Price t = tick_for(m, tick_); t > 0)
+      out_.push_back({T::SetTick, Side::Buy, false, true, m.symbol_index, 0, 0, t, 0});
   }
   void on_symbol_clear(const SymbolClear& m) {
     out_.push_back({T::ClearSymbol, Side::Buy, false, true, m.symbol_index, 0, 0, 0, 0});
@@ -40,7 +40,7 @@ class EventRecorder : public NullVisitor {
 
  private:
   std::vector<Event>& out_;
-  bool tick_from_mpv_;
+  TickPolicy tick_;
 };
 
 }  // namespace obl::xdp

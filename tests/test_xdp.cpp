@@ -131,6 +131,19 @@ void test_roundtrip() {
   CHECK(!decode_messages(pkt.data(), pkt.size() - 1, c2, st2));
 }
 
+void test_tick_policy() {
+  SymbolIndexMapping m{};
+  m.price_scale_code = 6;  // NYSE 2019 sample: prices in 1e-6 dollars
+  m.mpv = 100;
+  CHECK_EQ(tick_for(m, TickPolicy::Cent), 10000);
+  CHECK_EQ(tick_for(m, TickPolicy::Mpv), 100);
+  CHECK_EQ(tick_for(m, TickPolicy::None), 0);
+  m.price_scale_code = 4;
+  CHECK_EQ(tick_for(m, TickPolicy::Cent), 100);
+  m.price_scale_code = 2;
+  CHECK_EQ(tick_for(m, TickPolicy::Cent), 1);
+}
+
 void test_sequence() {
   SequenceTracker t;
   DecodeStats st;
@@ -188,6 +201,7 @@ int main() {
   test_sizes_and_offsets();
   test_roundtrip();
   test_sequence();
+  test_tick_policy();
   const char* tmp = std::getenv("TMPDIR");
   test_pcap_roundtrip(tmp ? tmp : "/tmp");
   return test_result("test_xdp");
