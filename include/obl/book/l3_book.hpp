@@ -189,6 +189,12 @@ class L3Book {
   }
 
   // ------------------------------------------------------------ queries
+  // Resting order by id, or nullptr (read-only view of the order node).
+  const Order* find_order(SymbolId sym, OrderId id) const {
+    const std::uint32_t i = index_.find(sym, id);
+    return i == kNil ? nullptr : &pool_[i];
+  }
+
   const SymbolBook* book(SymbolId sym) const { return sym < books_.size() ? &books_[sym] : nullptr; }
   std::size_t symbols() const { return books_.size(); }
   std::size_t order_count() const { return index_.size(); }
