@@ -6,6 +6,11 @@
 //       writes feed-neutral events for the chosen symbols (a full day of the
 //       whole market does not fit in memory), then optionally replays them
 //       and prints the book shape every EVERY events.
+//       Also writes OUT.pkt: approximate packet boundaries. The sample files
+//       carry no MoldUDP64 framing, so packets are rebuilt from the full
+//       message stream: consecutive messages with the same matching-engine
+//       timestamp share a packet, up to the MoldUDP64 payload limit. Only the
+//       chosen symbols' messages are kept inside each packet.
 //
 // Symbols are identified by ITCH stock locate. Order reference numbers are
 // unique per day, so (locate, ref) is a valid book key.
@@ -203,8 +208,23 @@ int main(int argc, char** argv) {
   std::uint16_t len;
   const auto t0 = Clock::now();
   std::uint64_t short_msgs = 0;
+  // packet reconstruction over the whole stream (all symbols, all types)
+  constexpr std::size_t kMoldPayload = 1500 - 20 - 8 - 20;  // Ethernet MTU - IPv4 - UDP - MoldUDP64 header
+  std::uint64_t pkt_id = 0, cur_ts = ~0ull;
+  std::size_t cur_bytes = 0;
+  std::vector<std::uint64_t> ev_pkt(ev.size(), 0);
+  for (std::size_t i = 0; i < ev_pkt.size(); ++i) ev_pkt[i] = ~0ull - i;  // SetTick events: one "packet" each
   while (r.next(m, len)) {
     const std::uint8_t t = m[0];
+    if (len >= 11) {
+      const std::uint64_t ts = itch::timestamp(m);
+      if (ts != cur_ts || cur_bytes + 2 + len > kMoldPayload) {
+        ++pkt_id;
+        cur_ts = ts;
+        cur_bytes = 0;
+      }
+      cur_bytes += 2 + len;
+    }
     if (!is_order_msg(t) || len < 3 || !want[itch::locate(m)]) continue;
     if (len < itch::expected_size(t)) {
       ++short_msgs;
@@ -240,12 +260,33 @@ int main(int argc, char** argv) {
         break;
       }
     }
+    ev_pkt.resize(ev.size(), pkt_id);
   }
   std::printf("%zu events in %.1fs (short messages %llu)\n", ev.size(),
               std::chrono::duration<double>(Clock::now() - t0).count(), static_cast<unsigned long long>(short_msgs));
   const std::string out = args.str("out", "itch.ev");
   book::save_events(out, ev);
   std::printf("wrote %s (%.1f MB)\n", out.c_str(), ev.size() * sizeof(Event) / 1e6);
+  {
+    std::vector<std::uint32_t> sizes;
+    for (std::size_t i = 0; i < ev.size(); ++i) {
+      if (i == 0 || ev_pkt[i] != ev_pkt[i - 1]) sizes.push_back(0);
+      ++sizes.back();
+    }
+    std::uint64_t hist[6] = {};  // 1, 2-4, 5-9, 10-19, 20-39, 40+
+    std::uint32_t maxp = 0;
+    for (auto n : sizes) {
+      ++hist[n == 1 ? 0 : n < 5 ? 1 : n < 10 ? 2 : n < 20 ? 3 : n < 40 ? 4 : 5];
+      maxp = std::max(maxp, n);
+    }
+    const std::string pkt = out.substr(0, out.rfind('.')) + ".pkt";
+    book::save_packets(pkt, sizes);
+    std::printf("wrote %s: %zu packets, avg %.2f events/packet, max %u; packets by size: 1:%llu 2-4:%llu 5-9:%llu "
+                "10-19:%llu 20-39:%llu 40+:%llu\n",
+                pkt.c_str(), sizes.size(), double(ev.size()) / sizes.size(), maxp,
+                (unsigned long long)hist[0], (unsigned long long)hist[1], (unsigned long long)hist[2],
+                (unsigned long long)hist[3], (unsigned long long)hist[4], (unsigned long long)hist[5]);
+  }
   if (const auto every = args.u64("profile", 0)) profile(ev, every, 100);
   return 0;
 }

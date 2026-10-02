@@ -67,6 +67,32 @@ inline void save_events(const std::string& path, const std::vector<Event>& ev) {
     throw std::runtime_error("write error on " + path);
 }
 
+// Packet boundaries for an event file (".pkt"): number of consecutive events
+// in each packet, in order. Lets a replay reproduce how messages arrived in bursts.
+inline constexpr char kPacketFileMagic[8] = {'O', 'B', 'L', 'P', 'K', 'T', '0', '1'};
+
+inline void save_packets(const std::string& path, const std::vector<std::uint32_t>& sizes) {
+  std::unique_ptr<FILE, int (*)(FILE*)> f(std::fopen(path.c_str(), "wb"), &std::fclose);
+  if (!f) throw std::runtime_error("cannot create " + path);
+  const std::uint64_t n = sizes.size();
+  if (std::fwrite(kPacketFileMagic, 1, 8, f.get()) != 8 || std::fwrite(&n, sizeof(n), 1, f.get()) != 1 ||
+      std::fwrite(sizes.data(), sizeof(std::uint32_t), sizes.size(), f.get()) != sizes.size())
+    throw std::runtime_error("write error on " + path);
+}
+
+inline std::vector<std::uint32_t> load_packets(const std::string& path) {
+  std::unique_ptr<FILE, int (*)(FILE*)> f(std::fopen(path.c_str(), "rb"), &std::fclose);
+  if (!f) throw std::runtime_error("cannot open " + path);
+  char magic[8];
+  std::uint64_t n = 0;
+  if (std::fread(magic, 1, 8, f.get()) != 8 || std::memcmp(magic, kPacketFileMagic, 8) != 0 ||
+      std::fread(&n, sizeof(n), 1, f.get()) != 1)
+    throw std::runtime_error("not a packet file: " + path);
+  std::vector<std::uint32_t> sizes(n);
+  if (std::fread(sizes.data(), sizeof(std::uint32_t), n, f.get()) != n) throw std::runtime_error("short read on " + path);
+  return sizes;
+}
+
 inline std::vector<Event> load_events(const std::string& path) {
   std::unique_ptr<FILE, int (*)(FILE*)> f(std::fopen(path.c_str(), "rb"), &std::fclose);
   if (!f) throw std::runtime_error("cannot open " + path);

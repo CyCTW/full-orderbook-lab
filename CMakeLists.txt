@@ -86,6 +86,9 @@ target_link_libraries(obl_dump PRIVATE obl)
 add_executable(obl_itch tools/itch.cpp)
 target_link_libraries(obl_itch PRIVATE obl)
 
+add_executable(obl_burst bench/burst.cpp)
+target_link_libraries(obl_burst PRIVATE obl)
+
 add_executable(obl_bench bench/bench.cpp)
 target_include_directories(obl_bench PRIVATE tools)
 target_link_libraries(obl_bench PRIVATE obl)
