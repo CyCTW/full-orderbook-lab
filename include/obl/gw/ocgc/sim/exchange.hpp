@@ -37,6 +37,10 @@ struct ExchangeConfig {
   std::uint32_t trade_date = 20261003;
   std::uint32_t msgs_per_sec = 0;  // per client; 0 = unlimited
   bool check_tick = true;
+  // Logon password check: (field from the Logon, expected password, now) -> ok. Default: the
+  // field must equal the password (tests without encryption). With RSA, decrypt and check the
+  // login-time prefix (see password.hpp).
+  std::function<bool(std::string_view, const std::string&, std::uint64_t)> verify_password;
 };
 
 // What the simulator writes to a client connection.
@@ -281,7 +285,8 @@ class Exchange {
     c.client = &cl;
     cl.conn = conn;
     cl.throttle.configure(cfg_.msgs_per_sec, 1'000'000'000);
-    if (refuse_logons_ || pw != cl.password) {
+    const bool pw_ok = cfg_.verify_password ? cfg_.verify_password(pw, cl.password, now_) : pw == cl.password;
+    if (refuse_logons_ || !pw_ok) {
       send_admin(cl, encode_logout(buf_, cl.next_out, cfg_.comp_id, "invalid password"));
       close_client(cl);
       return false;
@@ -386,7 +391,7 @@ class Exchange {
   // --- execution reports ---------------------------------------------------------------------------
 
   std::string time_str() const {
-    char t[32];
+    char t[32] = {};
     format_transact_time(t, cfg_.trade_date, us_of_day_utc());
     return std::string(t, 24);
   }

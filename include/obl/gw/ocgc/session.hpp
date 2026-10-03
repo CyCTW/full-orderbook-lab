@@ -34,6 +34,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -82,6 +83,9 @@ inline const char* to_string(CloseReason r) {
 struct SessionConfig {
   std::string comp_id;
   std::string encrypted_password;  // already RSA-encrypted as OCG-C requires (§3.5)
+  // If set, called for every Logon instead of using encrypted_password: the encrypted password
+  // carries the login time (§3.6), so it must be produced fresh for each attempt.
+  std::function<std::string()> password_provider;
   std::uint64_t heartbeat_ns = 20'000'000'000;  // §4.3: 20 s
   std::uint32_t test_request_after = 3;         // heartbeat intervals of silence before Test Request
   std::uint32_t test_request_timeout = 3;       // heartbeat intervals to wait for the answer
@@ -171,7 +175,8 @@ class Session {
     test_req_pending_ = false;
     last_recv_ = now;
     set_state(SessionState::LogonSent, now);
-    const std::size_t n = encode_logon(scratch_, next_out_, cfg_.comp_id, cfg_.encrypted_password, next_in_);
+    const std::string pw = cfg_.password_provider ? cfg_.password_provider() : cfg_.encrypted_password;
+    const std::size_t n = encode_logon(scratch_, next_out_, cfg_.comp_id, pw, next_in_);
     send_new(scratch_, n, now);
   }
 
