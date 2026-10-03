@@ -392,7 +392,7 @@ class OrderTable {
   void set_exchange_id(OrderSlot s, std::string_view id) {
     Cold& c = cold_[s];
     c.exch_id_len = static_cast<std::uint8_t>(std::min(id.size(), sizeof c.exch_id));
-    std::memcpy(c.exch_id, id.data(), c.exch_id_len);
+    if (c.exch_id_len) std::memcpy(c.exch_id, id.data(), c.exch_id_len);
   }
 
   static std::int64_t exposure_qty(const Order& o) {
