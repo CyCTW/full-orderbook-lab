@@ -283,6 +283,78 @@ void test_presence_map_high_bits() {
   CHECK((bits == std::vector<unsigned>{63, 64, 200}));
 }
 
+void test_requests_roundtrip() {
+  const OrderContext ctx{"CO99999901", "1234", 20261003};
+  std::uint8_t buf[512];
+  OrderRequest r;
+
+  std::size_t n = encode_cancel(buf, 5, ctx, "700", WireSide::Sell, 10000009, 10000001, 3600ull * 1'000'000);
+  CHECK(valid_frame(buf, n));
+  CHECK(decode_request(buf, n, MsgType::CancelOrder, r));
+  CHECK_EQ(r.cl_ord_id, 10000009u);
+  CHECK_EQ(r.orig_cl_ord_id, 10000001u);
+  CHECK(r.security_id == "700");
+  CHECK_EQ(r.side, 2);
+
+  n = encode_amend(buf, 6, ctx, "5", WireSide::Buy, 10000010, 10000002, 51 * kDecimalScale, 400 * kDecimalScale,
+                   Tif::Day, 0);
+  CHECK(valid_frame(buf, n));
+  CHECK(decode_request(buf, n, MsgType::AmendOrder, r));
+  CHECK_EQ(r.cl_ord_id, 10000010u);
+  CHECK_EQ(r.orig_cl_ord_id, 10000002u);
+  CHECK_EQ(r.price, 51 * kDecimalScale);
+  CHECK_EQ(r.qty, 400 * kDecimalScale);
+  CHECK_EQ(r.ord_type, 2);
+  CHECK(r.has_price);
+
+  n = encode_mass_cancel(buf, 7, ctx, 10000011, mass_cancel::kAllOrders, {}, 0, 0);
+  CHECK(decode_request(buf, n, MsgType::MassCancel, r));
+  CHECK_EQ(r.mass_type, mass_cancel::kAllOrders);
+  CHECK_EQ(r.side, 0);
+  n = encode_mass_cancel(buf, 8, ctx, 10000012, mass_cancel::kForSecurity, "700", 1, 0);
+  CHECK(decode_request(buf, n, MsgType::MassCancel, r));
+  CHECK(r.security_id == "700");
+  CHECK_EQ(r.side, 1);
+
+  // the New Order template decodes the same way
+  NewOrderTemplate tpl(kStatic);
+  tpl.fill({1, 10000013, 0, 400 * kDecimalScale, 100 * kDecimalScale});
+  CHECK(decode_request(tpl.data(), tpl.size(), MsgType::NewOrder, r));
+  CHECK_EQ(r.cl_ord_id, 10000013u);
+  CHECK_EQ(r.qty, 100 * kDecimalScale);
+  CHECK_EQ(r.side, 1);
+
+  MassCancelReport m;
+  m.cl_ord_id = 10000011;
+  m.request_type = mass_cancel::kAllOrders;
+  m.response = 0;
+  m.reject_code = 99;
+  m.report_id = "MA1";
+  m.reason = "no orders";
+  n = encode_mass_cancel_report(buf, 3, "OCGC", m, "20261003-01:00:00.000000");
+  MassCancelReport d;
+  CHECK(valid_frame(buf, n));
+  CHECK(decode_mass_cancel_report(buf, n, d));
+  CHECK_EQ(d.cl_ord_id, 10000011u);
+  CHECK_EQ(d.response, 0);
+  CHECK_EQ(d.reject_code, 99);
+  CHECK(d.report_id == "MA1" && d.reason == "no orders");
+
+  n = encode_lookup_request(buf, "CO99999901");
+  CHECK(valid_frame(buf, n));
+  CHECK_EQ(read_header(buf).seq, 1u);
+  LookupResult lr;
+  lr.accepted = true;
+  lr.primary_ip = "10.1.2.3";
+  lr.primary_port = 5001;
+  lr.secondary_ip = "10.1.2.4";
+  lr.secondary_port = 5002;
+  n = encode_lookup_response(buf, "OCGC", lr);
+  LookupResult ld;
+  CHECK(decode_lookup_response(buf, n, ld));
+  CHECK(ld.accepted && ld.primary_ip == "10.1.2.3" && ld.primary_port == 5001 && ld.secondary_port == 5002);
+}
+
 }  // namespace
 
 int main() {
@@ -294,5 +366,6 @@ int main() {
   test_template_matches_reference();
   test_exec_report_roundtrip();
   test_presence_map_high_bits();
+  test_requests_roundtrip();
   return test_result("test_ocgc");
 }

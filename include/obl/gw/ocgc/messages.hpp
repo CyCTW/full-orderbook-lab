@@ -4,6 +4,7 @@
 // Reject, Business Message Reject).
 
 #include <cassert>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -283,6 +284,206 @@ inline bool decode_reject(const std::uint8_t* msg, std::size_t len, MsgType type
       case reject::RefFieldName: out.ref_field = as_str(f); break;
       case reject::RefSeqNum: out.ref_seq = as_u32(f); break;
       case reject::ClOrdId: out.ref_id = as_str(f); break;
+      default: break;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Order requests other than the templated New Order: Cancel (13), Amend (12), Mass Cancel (14)
+
+struct OrderContext {
+  std::string_view comp_id;
+  std::string_view broker_id;
+  std::uint32_t trade_date = 0;  // YYYYMMDD
+};
+
+namespace detail {
+inline void put_req_id(Writer& w, unsigned bit, std::uint32_t id) {
+  char* p = w.alnum_slot(bit, field_size::kClOrdId);
+  std::to_chars(p, p + field_size::kClOrdId - 1, id);
+}
+inline void put_time(Writer& w, unsigned bit, std::uint32_t date, std::uint64_t us_of_day) {
+  format_transact_time(w.alnum_slot(bit, field_size::kTransactTime), date, us_of_day);
+}
+}  // namespace detail
+
+inline std::size_t encode_cancel(std::uint8_t* buf, std::uint32_t seq, const OrderContext& c,
+                                 std::string_view security_id, WireSide side, std::uint32_t cl_ord_id,
+                                 std::uint32_t orig_cl_ord_id, std::uint64_t us_of_day) {
+  namespace b = cancel_order;
+  Writer w(buf, MsgType::CancelOrder, seq, c.comp_id);
+  detail::put_req_id(w, b::ClOrdId, cl_ord_id);
+  w.alnum(b::SubmittingBrokerId, c.broker_id, field_size::kBrokerId);
+  w.alnum(b::SecurityId, security_id, field_size::kSecurityId);
+  w.u8(b::SecurityIdSource, kSecurityIdSourceExchangeSymbol);
+  w.alnum(b::SecurityExchange, "XHKG", field_size::kSecurityExchange);
+  detail::put_time(w, b::TransactTime, c.trade_date, us_of_day);
+  w.u8(b::Side, static_cast<std::uint8_t>(side));
+  detail::put_req_id(w, b::OrigClOrdId, orig_cl_ord_id);
+  return w.finish();
+}
+
+// Order Type and TIF must stay as in the original order (§7.6.3).
+inline std::size_t encode_amend(std::uint8_t* buf, std::uint32_t seq, const OrderContext& c,
+                                std::string_view security_id, WireSide side, std::uint32_t cl_ord_id,
+                                std::uint32_t orig_cl_ord_id, std::int64_t price, std::int64_t qty, Tif tif,
+                                std::uint64_t us_of_day) {
+  namespace b = amend_order;
+  Writer w(buf, MsgType::AmendOrder, seq, c.comp_id);
+  detail::put_req_id(w, b::ClOrdId, cl_ord_id);
+  w.alnum(b::SubmittingBrokerId, c.broker_id, field_size::kBrokerId);
+  w.alnum(b::SecurityId, security_id, field_size::kSecurityId);
+  w.u8(b::SecurityIdSource, kSecurityIdSourceExchangeSymbol);
+  w.alnum(b::SecurityExchange, "XHKG", field_size::kSecurityExchange);
+  detail::put_time(w, b::TransactTime, c.trade_date, us_of_day);
+  w.u8(b::Side, static_cast<std::uint8_t>(side));
+  detail::put_req_id(w, b::OrigClOrdId, orig_cl_ord_id);
+  w.u8(b::OrdType, static_cast<std::uint8_t>(OrdType::Limit));
+  w.decimal(b::Price, price);
+  w.decimal(b::OrderQty, qty);
+  if (tif != Tif::Day) w.u8(b::TimeInForce, static_cast<std::uint8_t>(tif));
+  w.u16(b::DisclosureInstructions, kDisclosureNone);
+  return w.finish();
+}
+
+// request_type: mass_cancel::kAllOrders, or kForSecurity with security_id; side 0 = both sides.
+inline std::size_t encode_mass_cancel(std::uint8_t* buf, std::uint32_t seq, const OrderContext& c,
+                                      std::uint32_t cl_ord_id, std::uint8_t request_type,
+                                      std::string_view security_id, std::uint8_t side, std::uint64_t us_of_day) {
+  namespace b = mass_cancel;
+  Writer w(buf, MsgType::MassCancel, seq, c.comp_id);
+  detail::put_req_id(w, b::ClOrdId, cl_ord_id);
+  w.alnum(b::SubmittingBrokerId, c.broker_id, field_size::kBrokerId);
+  if (request_type == b::kForSecurity) {
+    w.alnum(b::SecurityId, security_id, field_size::kSecurityId);
+    w.u8(b::SecurityIdSource, kSecurityIdSourceExchangeSymbol);
+    w.alnum(b::SecurityExchange, "XHKG", field_size::kSecurityExchange);
+  }
+  detail::put_time(w, b::TransactTime, c.trade_date, us_of_day);
+  if (side) w.u8(b::Side, side);
+  w.u8(b::MassCancelRequestType, request_type);
+  return w.finish();
+}
+
+// Any client order request, decoded (used by the exchange simulator).
+struct OrderRequest {
+  MsgType type{};
+  std::uint32_t cl_ord_id = 0, orig_cl_ord_id = 0;
+  LazyStr security_id, submitting_broker_id, order_id;
+  std::uint8_t side = 0, ord_type = 0, tif = 0, mass_type = 0;
+  std::int64_t price = 0, qty = 0;
+  bool has_price = false;
+};
+
+inline bool decode_request(const std::uint8_t* msg, std::size_t len, MsgType type, OrderRequest& r) {
+  const FieldTable* defs = fields_for(type);
+  if (!defs) return false;
+  r = OrderRequest{};
+  r.type = type;
+  // bits 0-7 have the same meaning in all four requests except bit 7 of Mass Cancel (Side, same)
+  return for_each_field_unchecked(msg, len, *defs, [&](const FieldRef& f) {
+    const char* name = f.def->name;
+    auto is = [&](const char* n) { return std::strcmp(name, n) == 0; };
+    if (f.bit == 0) r.cl_ord_id = parse_cl_ord_id(as_str(f));
+    else if (f.bit == 1) r.submitting_broker_id = LazyStr::raw(f.data, f.size);
+    else if (f.bit == 2) r.security_id = LazyStr::raw(f.data, f.size);
+    else if (f.bit == 7) r.side = as_u8(f);
+    else if (is("OriginalClientOrderID")) r.orig_cl_ord_id = parse_cl_ord_id(as_str(f));
+    else if (is("OrderID")) r.order_id = LazyStr::raw(f.data, f.size);
+    else if (is("OrderType")) r.ord_type = as_u8(f);
+    else if (is("Price")) {
+      r.price = as_decimal(f);
+      r.has_price = true;
+    } else if (is("OrderQuantity")) r.qty = as_decimal(f);
+    else if (is("TIF")) r.tif = as_u8(f);
+    else if (is("MassCancelRequestType")) r.mass_type = as_u8(f);
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Order Mass Cancel Report (15)
+
+struct MassCancelReport {
+  std::uint32_t cl_ord_id = 0;
+  std::uint8_t request_type = 0;
+  std::uint8_t response = 0;  // 0 = rejected
+  std::uint16_t reject_code = 0;
+  LazyStr report_id, reason;
+};
+
+inline std::size_t encode_mass_cancel_report(std::uint8_t* buf, std::uint32_t seq, std::string_view comp_id,
+                                             const MassCancelReport& m, std::string_view transact_time) {
+  namespace b = mass_cancel_report;
+  Writer w(buf, MsgType::OrderMassCancelReport, seq, comp_id);
+  detail::put_req_id(w, b::ClOrdId, m.cl_ord_id);
+  w.alnum(b::TransactTime, transact_time, field_size::kTransactTime);
+  w.u8(b::MassCancelRequestType, m.request_type);
+  w.alnum(b::MassActionReportId, m.report_id.view(), 21);
+  w.u8(b::MassCancelResponse, m.response);
+  if (m.response == 0) {
+    w.u16(b::MassCancelRejectCode, m.reject_code);
+    if (m.reason.p) w.var_alnum(b::Reason, m.reason.view());
+  }
+  return w.finish();
+}
+
+inline bool decode_mass_cancel_report(const std::uint8_t* msg, std::size_t len, MassCancelReport& m) {
+  namespace b = mass_cancel_report;
+  return for_each_field_unchecked(msg, len, b::kFields, [&](const FieldRef& f) {
+    switch (f.bit) {
+      case b::ClOrdId: m.cl_ord_id = parse_cl_ord_id(as_str(f)); break;
+      case b::MassCancelRequestType: m.request_type = as_u8(f); break;
+      case b::MassActionReportId: m.report_id = LazyStr::raw(f.data, f.size); break;
+      case b::MassCancelResponse: m.response = as_u8(f); break;
+      case b::MassCancelRejectCode: m.reject_code = as_u16(f); break;
+      case b::Reason: m.reason = LazyStr::raw(f.data, f.size); break;
+      default: break;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Lookup (7, 8)
+
+inline std::size_t encode_lookup_request(std::uint8_t* buf, std::string_view comp_id) {
+  Writer w(buf, MsgType::LookupRequest, 1, comp_id);
+  w.u8(lookup_request::TypeOfService, lookup_request::kOrderInput);
+  w.u8(lookup_request::ProtocolType, lookup_request::kBinary);
+  return w.finish();
+}
+
+struct LookupResult {
+  bool accepted = false;
+  std::uint8_t reject_code = 0;
+  LazyStr reason, primary_ip, secondary_ip;
+  std::uint16_t primary_port = 0, secondary_port = 0;
+};
+
+inline std::size_t encode_lookup_response(std::uint8_t* buf, std::string_view comp_id, const LookupResult& r) {
+  namespace b = lookup_response;
+  Writer w(buf, MsgType::LookupResponse, 1, comp_id);
+  w.u8(b::Status, r.accepted ? 0 : 1);
+  if (!r.accepted) {
+    w.u8(b::LookupRejectCode, r.reject_code);
+  } else {
+    w.alnum(b::PrimaryIp, r.primary_ip.view(), 16).u16(b::PrimaryPort, r.primary_port);
+    w.alnum(b::SecondaryIp, r.secondary_ip.view(), 16).u16(b::SecondaryPort, r.secondary_port);
+  }
+  return w.finish();
+}
+
+inline bool decode_lookup_response(const std::uint8_t* msg, std::size_t len, LookupResult& r) {
+  namespace b = lookup_response;
+  return for_each_field_unchecked(msg, len, b::kFields, [&](const FieldRef& f) {
+    switch (f.bit) {
+      case b::Status: r.accepted = as_u8(f) == 0; break;
+      case b::LookupRejectCode: r.reject_code = as_u8(f); break;
+      case b::Reason: r.reason = LazyStr::raw(f.data, f.size); break;
+      case b::PrimaryIp: r.primary_ip = LazyStr::raw(f.data, f.size); break;
+      case b::PrimaryPort: r.primary_port = as_u16(f); break;
+      case b::SecondaryIp: r.secondary_ip = LazyStr::raw(f.data, f.size); break;
+      case b::SecondaryPort: r.secondary_port = as_u16(f); break;
       default: break;
     }
   });

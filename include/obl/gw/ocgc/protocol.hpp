@@ -357,6 +357,117 @@ constexpr FieldTable make_fields() {
 inline constexpr FieldTable kFields = make_fields();
 }  // namespace exec_report
 
+// Mass Cancel (14), §7.6.5
+namespace mass_cancel {
+enum Bit : std::uint8_t {
+  ClOrdId = 0,
+  SubmittingBrokerId = 1,
+  SecurityId = 2,
+  SecurityIdSource = 3,
+  SecurityExchange = 4,
+  BrokerLocationId = 5,
+  TransactTime = 6,
+  Side = 7,
+  MassCancelRequestType = 8,
+  MarketSegmentId = 9,
+};
+inline constexpr std::uint8_t kForSecurity = 1;
+inline constexpr std::uint8_t kAllOrders = 7;
+inline constexpr std::uint8_t kForMarketSegment = 9;
+constexpr FieldTable make_fields() {
+  namespace s = field_size;
+  FieldTable t{};
+  t[ClOrdId] = {FieldKind::Alnum, s::kClOrdId, "ClientOrderID"};
+  t[SubmittingBrokerId] = {FieldKind::Alnum, s::kBrokerId, "SubmittingBrokerID"};
+  t[SecurityId] = {FieldKind::Alnum, s::kSecurityId, "SecurityID"};
+  t[SecurityIdSource] = {FieldKind::UInt8, 1, "SecurityIDSource"};
+  t[SecurityExchange] = {FieldKind::Alnum, s::kSecurityExchange, "SecurityExchange"};
+  t[BrokerLocationId] = {FieldKind::Alnum, s::kBrokerLocationId, "BrokerLocationID"};
+  t[TransactTime] = {FieldKind::Alnum, s::kTransactTime, "TransactionTime"};
+  t[Side] = {FieldKind::UInt8, 1, "Side"};
+  t[MassCancelRequestType] = {FieldKind::UInt8, 1, "MassCancelRequestType"};
+  t[MarketSegmentId] = {FieldKind::Alnum, 20, "MarketSegmentID"};
+  return t;
+}
+inline constexpr FieldTable kFields = make_fields();
+}  // namespace mass_cancel
+
+// Order Mass Cancel Report (15), §7.6.8
+namespace mass_cancel_report {
+enum Bit : std::uint8_t {
+  ClOrdId = 0,
+  SubmittingBrokerId = 1,
+  SecurityId = 2,
+  SecurityIdSource = 3,
+  SecurityExchange = 4,
+  BrokerLocationId = 5,
+  TransactTime = 6,
+  MassCancelRequestType = 7,
+  OwningBrokerId = 8,
+  MassActionReportId = 9,
+  MassCancelResponse = 10,  // 0 = rejected, else the request type carried out
+  MassCancelRejectCode = 11,
+  Reason = 12,
+};
+constexpr FieldTable make_fields() {
+  namespace s = field_size;
+  FieldTable t{};
+  t[ClOrdId] = {FieldKind::Alnum, s::kClOrdId, "ClientOrderID"};
+  t[SubmittingBrokerId] = {FieldKind::Alnum, s::kBrokerId, "SubmittingBrokerID"};
+  t[SecurityId] = {FieldKind::Alnum, s::kSecurityId, "SecurityID"};
+  t[SecurityIdSource] = {FieldKind::UInt8, 1, "SecurityIDSource"};
+  t[SecurityExchange] = {FieldKind::Alnum, s::kSecurityExchange, "SecurityExchange"};
+  t[BrokerLocationId] = {FieldKind::Alnum, s::kBrokerLocationId, "BrokerLocationID"};
+  t[TransactTime] = {FieldKind::Alnum, s::kTransactTime, "TransactionTime"};
+  t[MassCancelRequestType] = {FieldKind::UInt8, 1, "MassCancelRequestType"};
+  t[OwningBrokerId] = {FieldKind::Alnum, s::kBrokerId, "OwningBrokerID"};
+  t[MassActionReportId] = {FieldKind::Alnum, 21, "MassActionReportID"};
+  t[MassCancelResponse] = {FieldKind::UInt8, 1, "MassCancelResponse"};
+  t[MassCancelRejectCode] = {FieldKind::UInt16, 2, "MassCancelRejectCode"};
+  t[Reason] = {FieldKind::VarAlnum, s::kReasonMax, "Reason"};
+  return t;
+}
+inline constexpr FieldTable kFields = make_fields();
+}  // namespace mass_cancel_report
+
+// Lookup Request (7) / Lookup Response (8), §7.4. Both always carry sequence number 1.
+namespace lookup_request {
+enum Bit : std::uint8_t { TypeOfService = 0, ProtocolType = 1 };
+inline constexpr std::uint8_t kOrderInput = 1;
+inline constexpr std::uint8_t kBinary = 1;
+constexpr FieldTable make_fields() {
+  FieldTable t{};
+  t[TypeOfService] = {FieldKind::UInt8, 1, "TypeOfService"};
+  t[ProtocolType] = {FieldKind::UInt8, 1, "ProtocolType"};
+  return t;
+}
+inline constexpr FieldTable kFields = make_fields();
+}  // namespace lookup_request
+
+namespace lookup_response {
+enum Bit : std::uint8_t {
+  Status = 0,  // 0 accepted, 1 rejected
+  LookupRejectCode = 1,
+  Reason = 2,
+  PrimaryIp = 3,
+  PrimaryPort = 4,
+  SecondaryIp = 5,
+  SecondaryPort = 6,
+};
+constexpr FieldTable make_fields() {
+  FieldTable t{};
+  t[Status] = {FieldKind::UInt8, 1, "Status"};
+  t[LookupRejectCode] = {FieldKind::UInt8, 1, "LookupRejectCode"};
+  t[Reason] = {FieldKind::VarAlnum, field_size::kReasonMax, "Reason"};
+  t[PrimaryIp] = {FieldKind::Alnum, 16, "PrimaryIP"};
+  t[PrimaryPort] = {FieldKind::UInt16, 2, "PrimaryPort"};
+  t[SecondaryIp] = {FieldKind::Alnum, 16, "SecondaryIP"};
+  t[SecondaryPort] = {FieldKind::UInt16, 2, "SecondaryPort"};
+  return t;
+}
+inline constexpr FieldTable kFields = make_fields();
+}  // namespace lookup_response
+
 // Order Status (§8.2)
 enum class OrdStatus : std::uint8_t {
   New = 0,
@@ -515,6 +626,10 @@ inline const FieldTable* fields_for(MsgType t) {
     case MsgType::NewOrder: return &new_order::kFields;
     case MsgType::AmendOrder: return &amend_order::kFields;
     case MsgType::CancelOrder: return &cancel_order::kFields;
+    case MsgType::MassCancel: return &mass_cancel::kFields;
+    case MsgType::OrderMassCancelReport: return &mass_cancel_report::kFields;
+    case MsgType::LookupRequest: return &lookup_request::kFields;
+    case MsgType::LookupResponse: return &lookup_response::kFields;
     default: return nullptr;
   }
 }
