@@ -55,7 +55,12 @@ inline bool is_live(OrdState s) {
 
 enum class OrdTif : std::uint8_t { Day, IOC, FOK, AtCrossing };
 
-enum PendingFlags : std::uint8_t { kPendingNone = 0, kPendingCancel = 1, kPendingAmend = 2 };
+enum PendingFlags : std::uint8_t {
+  kPendingNone = 0,
+  kPendingCancel = 1,
+  kPendingAmend = 2,
+  kUnsent = 4,  // the latest request (new, cancel or amend) is queued locally, not on the wire yet
+};
 
 struct alignas(64) Order {
   std::int64_t price = 0;       // current (acknowledged) limit price
@@ -204,6 +209,22 @@ class OrderTable {
     add_exposure(o, +1);
     return o.pending_req;
   }
+
+  // An amend still queued locally (kUnsent) can be retargeted instead of sending a second one:
+  // only the latest price / quantity goes out.
+  bool retarget_amend(OrderSlot s, std::int64_t new_price, std::int64_t new_qty) {
+    Order& o = orders_[s];
+    if (!(o.pending & kPendingAmend) || !(o.pending & kUnsent) || new_qty <= o.cum_qty) return false;
+    remove_exposure(o);
+    o.amend_price = new_price;
+    o.amend_qty = new_qty;
+    add_exposure(o, +1);
+    return true;
+  }
+
+  void mark_unsent(OrderSlot s) { orders_[s].pending |= kUnsent; }
+  void mark_sent(OrderSlot s) { orders_[s].pending &= static_cast<std::uint8_t>(~kUnsent); }
+  bool is_unsent(OrderSlot s) const { return orders_[s].pending & kUnsent; }
 
   // Request ID for a mass cancel (not tied to an order).
   std::uint32_t mass_cancel_id() { return have_req() ? alloc_req(ReqKind::MassCancel, kNoOrder) : 0; }
