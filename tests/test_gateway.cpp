@@ -1,13 +1,18 @@
 // End to end, in memory: strategy -> OcgcGateway -> OCG-C session -> exchange simulator and back.
 
 #include <cstdint>
+#include <cstdio>
 #include <deque>
+#include <thread>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <unistd.h>
+
 #include "check.hpp"
 #include "obl/gw/ocgc/gateway.hpp"
+#include "obl/gw/ocgc/reconcile.hpp"
 #include "obl/gw/ocgc/sim/exchange.hpp"
 
 using namespace obl;
@@ -446,6 +451,72 @@ void lost_outbound(ReplayPolicy policy) {
   CHECK_EQ(h.gw->session().next_out_seq(), h.ex.next_in("CO1"));
 }
 
+void test_audit_metrics_control() {
+  Harness h;
+  const std::string path = "/tmp/obl_test_audit_" + std::to_string(::getpid()) + ".bin";
+  AuditLog audit;
+  AuditConfig ac;
+  ac.path = path;
+  ac.ring_bytes = 1 << 16;
+  CHECK(audit.open(ac));
+  h.gw->set_audit(&audit);
+  ControlChannel control;
+  h.gw->set_control(&control);
+
+  h.connect();
+  h.ex.add_liquidity("700", 2, 400 * S, 300 * S);
+  auto a = h.buy(h.tencent, 400 * S, 200 * S);
+  auto b = h.buy(h.tencent, 400 * S, 200 * S);  // 100 filled, 100 rests
+  h.gw->cancel(b.slot, h.now);
+  h.pump();
+  CHECK(h.orders.order(a.slot).state == OrdState::Filled);
+  CHECK(h.orders.order(b.slot).state == OrdState::Cancelled);
+
+  // a control thread tightens a limit and engages the kill switch; both take effect in poll()
+  std::thread ctl([&] {
+    SymbolLimits L;
+    L.max_order_qty = 100 * S;
+    control.post([&, L] { h.risk.set_symbol_limits(h.tencent, L); });
+  });
+  ctl.join();
+  CHECK(h.gw->new_order(h.tencent, OrdSide::Buy, 399 * S, 200 * S, h.now).status == SendStatus::Sent);  // not yet applied
+  h.tick(1 * kMs);
+  auto c = h.gw->new_order(h.tencent, OrdSide::Buy, 399 * S, 200 * S, h.now);
+  CHECK(c.risk == RiskReject::MaxOrderQty);
+
+  const GatewayMetrics& m = h.gw->metrics();
+  CHECK_EQ(m.orders_sent.get(), 3u);
+  CHECK_EQ(m.cancels_sent.get(), 1u);
+  CHECK_EQ(m.fills.get(), 2u);
+  CHECK_EQ(m.risk_rejects[static_cast<std::size_t>(RiskReject::MaxOrderQty)].get(), 1u);
+  CHECK_EQ(m.session_ups.get(), 1u);
+  CHECK(m.summary().find("fills=2") != std::string::npos);
+
+  h.pump();
+  audit.close();
+  CHECK_EQ(audit.dropped(), 0u);
+  std::uint64_t in = 0, out = 0;
+  CHECK(read_audit(path, [&](const AuditRecord& r) { (r.dir == AuditDir::In ? in : out)++; }));
+  CHECK_EQ(in, m.msgs_in.get());
+  CHECK_EQ(out, m.msgs_out.get());
+
+  // reconciliation: fills rebuilt from the audit log against a counterparty file
+  auto ours = fills_from_audit(path);
+  CHECK_EQ(ours.size(), 2u);
+  CHECK_EQ(ours[0].qty + ours[1].qty, 300 * S);
+  CHECK(reconcile(ours, ours).clean());
+  auto theirs = ours;
+  theirs[1].qty -= 100 * S;
+  theirs.push_back({"X1", "1", "1", "700", 1, 100 * S, 400 * S, 0});
+  theirs.erase(theirs.begin());
+  auto rr = reconcile(ours, theirs);
+  CHECK(!rr.clean());
+  CHECK_EQ(rr.only_ours.size(), 1u);
+  CHECK_EQ(rr.only_theirs.size(), 1u);
+  CHECK_EQ(rr.mismatched.size(), 1u);
+  std::remove(path.c_str());
+}
+
 }  // namespace
 
 int main() {
@@ -461,5 +532,6 @@ int main() {
   test_session_down_drops_queue();
   lost_outbound(ReplayPolicy::Replay);
   lost_outbound(ReplayPolicy::GapFillBusiness);
+  test_audit_metrics_control();
   return test_result("test_gateway");
 }

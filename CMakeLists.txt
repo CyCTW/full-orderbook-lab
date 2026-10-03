@@ -94,6 +94,12 @@ target_link_libraries(obl_itch PRIVATE obl)
 add_executable(obl_burst bench/burst.cpp)
 target_link_libraries(obl_burst PRIVATE obl)
 
+add_executable(obl_ocgc_demo tools/ocgc_demo.cpp)
+target_link_libraries(obl_ocgc_demo PRIVATE obl)
+
+add_executable(obl_ocgc_audit tools/ocgc_audit.cpp)
+target_link_libraries(obl_ocgc_audit PRIVATE obl)
+
 add_executable(obl_ocgc_bench bench/ocgc_bench.cpp)
 target_link_libraries(obl_ocgc_bench PRIVATE obl)
 
@@ -102,8 +108,11 @@ target_include_directories(obl_bench PRIVATE tools)
 target_link_libraries(obl_bench PRIVATE obl)
 
 enable_testing()
-foreach(t test_xdp test_book test_itch test_view test_ocgc test_ocgc_session test_order_state test_risk test_throttle test_gateway test_tcp)
+foreach(t test_xdp test_book test_itch test_view test_ocgc test_ocgc_session test_order_state test_risk test_throttle test_gateway test_tcp test_spsc)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE obl)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
+find_package(Threads REQUIRED)
+target_link_libraries(test_spsc PRIVATE Threads::Threads)
+target_link_libraries(test_gateway PRIVATE Threads::Threads)

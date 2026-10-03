@@ -29,7 +29,9 @@
 #include <string>
 #include <vector>
 
+#include "obl/gw/audit.hpp"
 #include "obl/gw/instrument.hpp"
+#include "obl/gw/metrics.hpp"
 #include "obl/gw/ocgc/messages.hpp"
 #include "obl/gw/ocgc/order_template.hpp"
 #include "obl/gw/ocgc/report_adapter.hpp"
@@ -112,6 +114,11 @@ class OcgcGateway {
 
   using SessionT = Session<Transport, OcgcGateway>;
   SessionT& session() { return session_; }
+  const GatewayMetrics& metrics() const { return metrics_; }
+  // Optional: audit log of every message in and out; control channel run in poll().
+  void set_audit(AuditLog* a) { audit_ = a; }
+  void set_control(ControlChannel* c) { control_ = c; }
+  Throttle& throttle_mut() { return throttle_; }
   const Throttle& throttle() const { return throttle_; }
   std::uint8_t route() const { return cfg_.route; }
   bool active() const { return session_.active(); }
@@ -126,7 +133,7 @@ class OcgcGateway {
     now_ = now;
     const bool was_up = session_.state() != SessionState::Disconnected;
     session_.on_disconnected();
-    if (was_up) session_down(CloseReason::ProtocolError);
+    if (was_up) session_down(CloseReason::ConnectionLost);
   }
   void on_bytes(const std::uint8_t* p, std::size_t n, std::uint64_t now) {
     now_ = now;
@@ -141,6 +148,8 @@ class OcgcGateway {
   // when busy polling; at least every few milliseconds otherwise).
   void poll(std::uint64_t now) {
     now_ = now;
+    if (control_) [[unlikely]]
+      control_->run_pending();
     session_.on_timer(now);
     if (risk_.kill_switch().engaged() && !kill_handled_) [[unlikely]]
       handle_kill(now);
@@ -155,8 +164,10 @@ class OcgcGateway {
     now_ = now;
     if (!session_.active()) [[unlikely]]
       return {SendStatus::RejectedSessionDown};
-    if (const RiskReject r = risk_.check_new(sym, side, price, qty, now, tif); r != RiskReject::None) [[unlikely]]
+    if (const RiskReject r = risk_.check_new(sym, side, price, qty, now, tif); r != RiskReject::None) [[unlikely]] {
+      metrics_.risk_rejects[static_cast<std::size_t>(r)].inc();
       return {SendStatus::RejectedRisk, kNoOrder, r};
+    }
     const OrderSlot s = orders_.new_order(sym, side, price, qty, tif, tag);
     if (s == kNoOrder) [[unlikely]]
       return {SendStatus::RejectedNoIds};
@@ -194,8 +205,10 @@ class OcgcGateway {
   SendResult amend(OrderSlot s, std::int64_t new_price, std::int64_t new_qty, std::uint64_t now) {
     now_ = now;
     if (!session_.active()) return {SendStatus::RejectedSessionDown, s};
-    if (const RiskReject r = risk_.check_amend(s, new_price, new_qty, now); r != RiskReject::None)
+    if (const RiskReject r = risk_.check_amend(s, new_price, new_qty, now); r != RiskReject::None) {
+      metrics_.risk_rejects[static_cast<std::size_t>(r)].inc();
       return {SendStatus::RejectedRisk, s, r};
+    }
     if (orders_.retarget_amend(s, new_price, new_qty)) return {SendStatus::Queued, s};  // queued one updated
     const std::uint32_t req = orders_.amend(s, new_price, new_qty);
     if (!req) return {SendStatus::RejectedState, s};
@@ -219,6 +232,7 @@ class OcgcGateway {
     // risk-reducing: not held back by the throttle (OCG-C may still reject it if over the limit)
     throttle_.admit(ReqKind::MassCancel, now);
     session_.send_business(buf_, n, now);
+    metrics_.mass_cancels_sent.inc();
     return SendStatus::Sent;
   }
 
@@ -239,7 +253,17 @@ class OcgcGateway {
 
   // --- Session handler interface (called by Session) -------------------------------------------
 
+  void on_inbound_frame(const std::uint8_t* m, std::size_t n) {
+    metrics_.msgs_in.inc();
+    if (audit_) audit_->log(AuditDir::In, cfg_.route, now_, m, n);
+  }
+  void on_outbound_frame(const std::uint8_t* m, std::size_t n) {
+    metrics_.msgs_out.inc();
+    if (audit_) audit_->log(AuditDir::Out, cfg_.route, now_, m, n);
+  }
+
   void on_session_active(const SessionFields&) {
+    metrics_.session_ups.inc();
     app_.on_session(true, CloseReason::LogoutComplete);
     // engaged while we were disconnected: the orders may still be live at the exchange
     if (risk_.kill_switch().engaged() && kill_handled_) mass_cancel(now_);
@@ -255,6 +279,7 @@ class OcgcGateway {
     const OrderSlot s = orders_.slot_of(req.cl_ord_id);
     const ReqKind k = orders_.kind_of(req.cl_ord_id);
     orders_.unsend(req.cl_ord_id);
+    count_drop(DropReason::NotSent);
     if (s != kNoOrder) app_.on_request_dropped(s, k, DropReason::NotSent);
   }
 
@@ -267,8 +292,16 @@ class OcgcGateway {
         if (u.slot == kNoOrder) return;
         switch (u.event) {
           case OrderEvent::Filled:
+            metrics_.fills.inc();
+            risk_.on_position_change(orders_.order(u.slot).symbol);
+            break;
           case OrderEvent::FillBusted: risk_.on_position_change(orders_.order(u.slot).symbol); break;
-          case OrderEvent::Rejected: risk_.on_exchange_reject(now_); break;
+          case OrderEvent::Rejected:
+            metrics_.rejects_exchange.inc();
+            risk_.on_exchange_reject(now_);
+            break;
+          case OrderEvent::Acked: metrics_.acks.inc(); break;
+          case OrderEvent::Cancelled: metrics_.cancels.inc(); break;
           default: break;
         }
         if (u.event != OrderEvent::Duplicate) app_.on_order_update(u, orders_.order(u.slot));
@@ -282,6 +315,7 @@ class OcgcGateway {
         const OrderSlot s = orders_.slot_of(id);
         if (s == kNoOrder) return;
         const ReqKind k = orders_.kind_of(id);
+        metrics_.business_rejects.inc();
         risk_.on_exchange_reject(now_);
         orders_.unsend(id);  // the request was not accepted: as if never sent
         app_.on_request_dropped(s, k, DropReason::BusinessReject);
@@ -326,6 +360,7 @@ class OcgcGateway {
     const NewOrderVar v{0, o.req_id, us_of_day(now), o.price, o.qty};
     session_.send_new_order(tmpl(o.symbol, o.side, o.tif), v, now);
     orders_.mark_sent(s);
+    metrics_.orders_sent.inc();
   }
   void send_cancel(OrderSlot s, std::uint64_t now) {
     const Order& o = orders_.order(s);
@@ -333,6 +368,7 @@ class OcgcGateway {
                                         o.pending_req, o.req_id, us_of_day(now));
     session_.send_business(buf_, n, now);
     orders_.mark_sent(s);
+    metrics_.cancels_sent.inc();
   }
   void send_amend(OrderSlot s, std::uint64_t now) {
     const Order& o = orders_.order(s);
@@ -340,6 +376,7 @@ class OcgcGateway {
                                        o.req_id, o.amend_price, o.amend_qty, wire_tif(o.tif), us_of_day(now));
     session_.send_business(buf_, n, now);
     orders_.mark_sent(s);
+    metrics_.amends_sent.inc();
   }
 
   SendResult queue(ReqKind k, OrderSlot s, std::uint32_t req, std::uint64_t now) {
@@ -348,6 +385,7 @@ class OcgcGateway {
       return {SendStatus::RejectedThrottleFull, s};
     }
     orders_.mark_unsent(s);
+    metrics_.queued.inc();
     return {SendStatus::Queued, s};
   }
 
@@ -365,11 +403,23 @@ class OcgcGateway {
   }
 
   void drop(const Queued& q, DropReason why) {
+    count_drop(why);
     orders_.unsend(q.req_id);
     app_.on_request_dropped(q.slot, q.kind, why);
   }
 
+  void count_drop(DropReason why) {
+    switch (why) {
+      case DropReason::SessionDown: metrics_.dropped_session_down.inc(); break;
+      case DropReason::Expired: metrics_.dropped_expired.inc(); break;
+      case DropReason::KillSwitch: metrics_.dropped_kill.inc(); break;
+      case DropReason::NotSent: metrics_.dropped_not_sent.inc(); break;
+      case DropReason::BusinessReject: break;
+    }
+  }
+
   void session_down(CloseReason r) {
+    metrics_.session_downs.inc();
     // Nothing queued may go out late after a reconnect: drop it all and tell the strategy.
     for (ReqKind k : {ReqKind::Cancel, ReqKind::Amend, ReqKind::New})
       throttle_.clear(k, [&](const Queued& q) { drop(q, DropReason::SessionDown); });
@@ -403,6 +453,9 @@ class OcgcGateway {
   alignas(64) std::uint8_t buf_[512];
   std::uint64_t now_ = 0;
   bool kill_handled_ = false;
+  GatewayMetrics metrics_;
+  AuditLog* audit_ = nullptr;
+  ControlChannel* control_ = nullptr;
 };
 
 }  // namespace obl::gw::ocgc

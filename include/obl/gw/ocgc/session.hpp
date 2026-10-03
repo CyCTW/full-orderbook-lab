@@ -9,6 +9,7 @@
 //
 //   Transport: void send(const std::uint8_t*, std::size_t);  void close();
 //   Handler:   void on_session_active(const SessionFields& logon_reply);
+//              (optional) void on_inbound_frame / on_outbound_frame(const uint8_t*, size_t);
 //              void on_business(const Header&, const std::uint8_t* msg, std::size_t len);
 //              void on_not_sent(std::uint32_t seq, const std::uint8_t* msg, std::size_t len);
 //              void on_session_closed(CloseReason);
@@ -61,6 +62,7 @@ enum class CloseReason : std::uint8_t {
   NextExpectedTooHigh,  // peer expects a sequence number we have not sent (§5.3 case 1)
   HeartbeatTimeout,  // no answer to Test Request (§4.3)
   ProtocolError,
+  ConnectionLost,    // transport dropped (TCP reset, peer gone) without a Logout
 };
 
 inline const char* to_string(CloseReason r) {
@@ -76,6 +78,7 @@ inline const char* to_string(CloseReason r) {
     case CloseReason::NextExpectedTooHigh: return "next expected too high";
     case CloseReason::HeartbeatTimeout: return "heartbeat timeout";
     case CloseReason::ProtocolError: return "protocol error";
+    case CloseReason::ConnectionLost: return "connection lost";
   }
   return "?";
 }
@@ -196,7 +199,7 @@ class Session {
       return false;
     v.seq = next_out_;
     const std::uint8_t* m = t.fill_regs(v);
-    tx_.send(m, t.size());
+    xmit(m, t.size());
     // bookkeeping only after the bytes are handed to the transport
     store_.append(next_out_++, m, t.size());
     last_send_ = now;
@@ -282,6 +285,7 @@ class Session {
       if (len < hdr::kSize + kTrailerSize || len > kMaxMessage) return fail(CloseReason::BadFrame, n);
       if (n - off < len) break;
       if (!verify_checksum(m, len)) return fail(CloseReason::BadChecksum, n);
+      if constexpr (requires { app_.on_inbound_frame(m, len); }) app_.on_inbound_frame(m, len);
       process(m, len, now);
       if (state_ == SessionState::Disconnected) return n;
       off += len;
@@ -388,13 +392,13 @@ class Session {
         for (std::uint32_t s = seq; s <= run_end; ++s)
           if (!is_admin(store_.type(s))) app_.on_not_sent(s, store_.data(s), store_.size(s));
         const std::size_t n = encode_sequence_reset(scratch_, seq, cfg_.comp_id, run_end + 1, true, true);
-        tx_.send(scratch_, n);  // reuses an old sequence number: not stored again
+        xmit(scratch_, n);  // reuses an old sequence number: not stored again
         seq = run_end + 1;
       } else {
         const std::size_t n = store_.size(seq);
         std::memcpy(replay_, store_.data(seq), n);
         stamp(replay_, n, seq, true);
-        tx_.send(replay_, n);
+        xmit(replay_, n);
         ++seq;
       }
     }
@@ -415,10 +419,17 @@ class Session {
     store_le<std::uint32_t>(msg + len - kTrailerSize, checksum(msg, len - kTrailerSize));
   }
 
+  // Every byte that leaves goes through here; the handler may watch it (audit log), after the
+  // send.
+  void xmit(const std::uint8_t* m, std::size_t n) {
+    tx_.send(m, n);
+    if constexpr (requires { app_.on_outbound_frame(m, n); }) app_.on_outbound_frame(m, n);
+  }
+
   // New outbound message carrying sequence number next_out_.
   void send_new(const std::uint8_t* msg, std::size_t len, std::uint64_t now) {
     assert(load_le<std::uint32_t>(msg + hdr::kSeqNum) == next_out_);
-    tx_.send(msg, len);
+    xmit(msg, len);
     store_.append(next_out_++, msg, len);
     last_send_ = now;
   }
