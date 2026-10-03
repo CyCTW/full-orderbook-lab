@@ -53,6 +53,7 @@ if(OBL_WITH_MIMALLOC)
 endif()
 
 find_package(ZLIB)
+find_package(Threads REQUIRED)
 find_package(OpenSSL COMPONENTS Crypto)
 
 add_library(obl INTERFACE)
@@ -100,6 +101,9 @@ target_link_libraries(obl_ocgc_demo PRIVATE obl)
 add_executable(obl_ocgc_audit tools/ocgc_audit.cpp)
 target_link_libraries(obl_ocgc_audit PRIVATE obl)
 
+add_executable(obl_gw_bench bench/gw_bench.cpp)
+target_link_libraries(obl_gw_bench PRIVATE obl Threads::Threads)
+
 add_executable(obl_ocgc_bench bench/ocgc_bench.cpp)
 target_link_libraries(obl_ocgc_bench PRIVATE obl)
 
@@ -113,6 +117,5 @@ foreach(t test_xdp test_book test_itch test_view test_ocgc test_ocgc_session tes
   target_link_libraries(${t} PRIVATE obl)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
-find_package(Threads REQUIRED)
 target_link_libraries(test_spsc PRIVATE Threads::Threads)
 target_link_libraries(test_gateway PRIVATE Threads::Threads)

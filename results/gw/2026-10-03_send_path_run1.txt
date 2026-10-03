@@ -1,0 +1,21 @@
+tsc 2.800 GHz, 200000 orders per run, pinned to cpu 2
+
+null transport (software only)
+  ns                                          p50      p99    p99.9    p99.99
+  new_order() -> bytes handed over           80.0    249.3    511.8   30622.9
+  new_order() whole call                    103.9    295.7    632.5   31275.7
+
+TCP loopback, kernel send() (bytes in the kernel)
+  ns                                          p50      p99    p99.9    p99.99
+  new_order() -> bytes handed over         3443.9  10208.6 126385.1  452269.0
+  new_order() whole call                   3486.1  10360.7 137296.6  473911.2
+
+stages alone (same setup)
+  ns                                          p50      p99    p99.9    p99.99
+  risk.check_new (all checks)                55.0     67.5     83.9   16796.8
+  risk.check_new (no self-trade scan)        16.4     40.0    104.6     897.9
+  orders.new_order                           14.6    132.1    410.7    4814.6
+  throttle.admit (unlimited)                  0.0      0.4      4.6      66.1
+  throttle.admit (sliding window)             6.4     10.4    147.1     320.7
+  template fill_regs (encode + CRC)          18.2     32.5     67.5     877.1
+  message store append (184 B)                5.0    143.9    371.4    1019.3
