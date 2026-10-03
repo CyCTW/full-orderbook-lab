@@ -97,7 +97,7 @@ target_include_directories(obl_bench PRIVATE tools)
 target_link_libraries(obl_bench PRIVATE obl)
 
 enable_testing()
-foreach(t test_xdp test_book test_itch test_view test_ocgc test_ocgc_session test_order_state)
+foreach(t test_xdp test_book test_itch test_view test_ocgc test_ocgc_session test_order_state test_risk)
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE obl)
   add_test(NAME ${t} COMMAND ${t})

@@ -336,6 +336,8 @@ class OrderTable {
   std::uint64_t tag(OrderSlot s) const { return cold_[s].tag; }
   std::string_view exchange_id(OrderSlot s) const { return {cold_[s].exch_id, cold_[s].exch_id_len}; }
   const Position& position(SymbolIdx sym) const { return positions_[sym]; }
+  // Sum over all symbols of open buy + open sell notional (worst case), kept incrementally.
+  std::int64_t gross_open_notional() const { return gross_open_notional_; }
   std::uint32_t order_count() const { return n_orders_; }
   std::uint32_t next_req_id() const { return next_req_; }
 
@@ -357,6 +359,7 @@ class OrderTable {
     for (std::uint32_t i = 0; i < next_req_ - cfg_.first_req_id; ++i) reqs_[i] = Req{};
     next_req_ = cfg_.first_req_id;
     n_orders_ = 0;
+    gross_open_notional_ = 0;
     live_head_.assign(cfg_.max_symbols, kNoOrder);
     for (auto& p : positions_) {
       const std::int64_t pos = p.pos;
@@ -405,12 +408,14 @@ class OrderTable {
   }
   void add_exposure(const Order& o, int sign) {
     Position& p = positions_[o.symbol];
+    const std::int64_t n = sign * exposure_notional(o);
+    gross_open_notional_ += n;
     if (is_buy(o.side)) {
       p.open_buy_qty += sign * exposure_qty(o);
-      p.open_buy_notional += sign * exposure_notional(o);
+      p.open_buy_notional += n;
     } else {
       p.open_sell_qty += sign * exposure_qty(o);
-      p.open_sell_notional += sign * exposure_notional(o);
+      p.open_sell_notional += n;
     }
   }
   void remove_exposure(const Order& o) { add_exposure(o, -1); }
@@ -462,6 +467,7 @@ class OrderTable {
   OrderTableConfig cfg_;
   std::uint32_t next_req_;
   std::uint32_t n_orders_ = 0;
+  std::int64_t gross_open_notional_ = 0;
   std::vector<Req> reqs_;
   std::vector<Order> orders_;
   std::vector<Cold> cold_;

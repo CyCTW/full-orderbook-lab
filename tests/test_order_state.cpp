@@ -238,6 +238,9 @@ void test_random_consistency() {
   std::mt19937 rng(11);
   std::vector<OrderSlot> slots;
   auto check_totals = [&] {
+    std::int64_t gross = 0;
+    for (SymbolIdx sym = 0; sym < 3; ++sym) gross += t.position(sym).open_buy_notional + t.position(sym).open_sell_notional;
+    CHECK_EQ(t.gross_open_notional(), gross);
     for (SymbolIdx sym = 0; sym < 3; ++sym) {
       std::int64_t buy = 0, sell = 0, nb = 0, ns = 0;
       std::uint32_t live = 0;
