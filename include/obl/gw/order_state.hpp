@@ -355,6 +355,8 @@ class OrderTable {
 
   const Order& order(OrderSlot s) const { return orders_[s]; }
   std::uint64_t tag(OrderSlot s) const { return cold_[s].tag; }
+  std::uint8_t route(OrderSlot s) const { return cold_[s].route; }
+  void set_route(OrderSlot s, std::uint8_t r) { cold_[s].route = r; }
   std::string_view exchange_id(OrderSlot s) const { return {cold_[s].exch_id, cold_[s].exch_id_len}; }
   const Position& position(SymbolIdx sym) const { return positions_[sym]; }
   // Sum over all symbols of open buy + open sell notional (worst case), kept incrementally.
@@ -397,8 +399,9 @@ class OrderTable {
   struct Cold {
     std::uint64_t tag = 0;
     OrderSlot next = kNoOrder, prev = kNoOrder;  // per-symbol live list
+    std::uint8_t route = 0;                      // which exchange session carries the order
     std::uint8_t exch_id_len = 0;
-    char exch_id[23] = {};
+    char exch_id[22] = {};
   };
 
   bool have_req() const { return next_req_ - cfg_.first_req_id < cfg_.max_requests; }

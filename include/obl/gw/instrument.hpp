@@ -55,12 +55,22 @@ inline bool hkex_valid_price(std::int64_t price) {
   return tick != 0 && price % tick == 0;
 }
 
+// Trading phase of an instrument, set from market data (OMD-C Trading Session Status / Security
+// Status). OCG-C itself does not report it.
+enum class MarketPhase : std::uint8_t {
+  Continuous,  // default: limit orders, IOC / FOK
+  Auction,     // pre-opening or closing auction: at-crossing (TIF 9) orders only
+  Halted,      // trading halt, VCM cooling-off handled by the exchange
+  Closed,
+};
+
 struct Instrument {
   std::string security_id;     // exchange symbol, e.g. "700"
   std::int64_t board_lot = 0;  // shares per board lot, fixed point (100 shares = 100 * kScale)
   bool shortable = false;      // on the designated short-sell list
   bool restricted = false;     // on the firm's restricted list: no new orders
   std::int64_t reference_price = 0;  // for price collars; 0 = unknown
+  MarketPhase phase = MarketPhase::Continuous;
 };
 
 class InstrumentTable {

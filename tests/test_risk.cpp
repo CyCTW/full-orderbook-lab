@@ -94,6 +94,16 @@ void test_order_checks() {
   CHECK(r.check_new(T, OrdSide::Buy, 400 * S, 100 * S, 0) == RiskReject::NoReferencePrice);
   f.ins[T].reference_price = 400 * S;
 
+  f.ins[T].phase = MarketPhase::Auction;
+  CHECK(r.check_new(T, OrdSide::Buy, 400 * S, 100 * S, 0) == RiskReject::MarketPhase);
+  CHECK(r.check_new(T, OrdSide::Buy, 400 * S, 100 * S, 0, OrdTif::AtCrossing) == RiskReject::None);
+  f.ins[T].phase = MarketPhase::Continuous;
+  CHECK(r.check_new(T, OrdSide::Buy, 400 * S, 100 * S, 0, OrdTif::AtCrossing) == RiskReject::MarketPhase);
+  CHECK(r.check_new(T, OrdSide::Buy, 400 * S, 100 * S, 0, OrdTif::IOC) == RiskReject::None);
+  f.ins[T].phase = MarketPhase::Halted;
+  CHECK(r.check_new(T, OrdSide::Buy, 400 * S, 100 * S, 0) == RiskReject::MarketPhase);
+  f.ins[T].phase = MarketPhase::Continuous;
+
   f.ins[T].restricted = true;
   CHECK(r.check_new(T, OrdSide::Buy, 400 * S, 100 * S, 0) == RiskReject::Restricted);
   f.ins[T].restricted = false;

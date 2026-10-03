@@ -44,6 +44,7 @@ enum class RiskReject : std::uint8_t {
   OrderRate,
   Duplicate,
   SelfTrade,          // would cross one of our own resting orders
+  MarketPhase,        // order type not allowed in the current trading phase, or market closed
 };
 
 inline const char* to_string(RiskReject r) {
@@ -66,6 +67,7 @@ inline const char* to_string(RiskReject r) {
     case RiskReject::OrderRate: return "order rate limit";
     case RiskReject::Duplicate: return "duplicate order";
     case RiskReject::SelfTrade: return "self trade";
+    case RiskReject::MarketPhase: return "not allowed in this trading phase";
   }
   return "?";
 }
@@ -137,7 +139,8 @@ class RiskEngine {
 
   // --- send path ------------------------------------------------------------------------------
 
-  RiskReject check_new(SymbolIdx s, OrdSide side, std::int64_t price, std::int64_t qty, std::uint64_t now) {
+  RiskReject check_new(SymbolIdx s, OrdSide side, std::int64_t price, std::int64_t qty, std::uint64_t now,
+                       OrdTif tif = OrdTif::Day) {
     if (kill_.engaged()) [[unlikely]]
       return RiskReject::KillSwitch;
     if (s >= ins_.size()) return RiskReject::UnknownSymbol;
@@ -147,6 +150,7 @@ class RiskEngine {
     const Position& p = orders_.position(s);
 
     if (in.restricted) return RiskReject::Restricted;
+    if (!phase_allows(in.phase, tif)) return RiskReject::MarketPhase;
     if (!hkex_valid_price(price)) return RiskReject::BadPrice;
     if (qty <= 0 || (in.board_lot && qty % in.board_lot)) return RiskReject::BadQuantity;
     if (L.max_order_qty && qty > L.max_order_qty) return RiskReject::MaxOrderQty;
@@ -193,6 +197,7 @@ class RiskEngine {
     const Instrument& in = ins_[o.symbol];
     const SymbolLimits& L = sym_[o.symbol].limits;
     const Position& p = orders_.position(o.symbol);
+    if (!phase_allows(in.phase, o.tif)) return RiskReject::MarketPhase;
     if (!hkex_valid_price(new_price)) return RiskReject::BadPrice;
     if (new_qty <= o.cum_qty || (in.board_lot && new_qty % in.board_lot)) return RiskReject::BadQuantity;
     if (L.max_order_qty && new_qty > L.max_order_qty) return RiskReject::MaxOrderQty;
@@ -253,6 +258,14 @@ class RiskEngine {
     OrdSide last_side = OrdSide::Buy;
     bool has_last = false;
   };
+
+  static bool phase_allows(MarketPhase ph, OrdTif tif) {
+    switch (ph) {
+      case MarketPhase::Continuous: return tif != OrdTif::AtCrossing;
+      case MarketPhase::Auction: return tif == OrdTif::AtCrossing;
+      default: return false;
+    }
+  }
 
   static RiskReject check_collar(const Instrument& in, const SymbolLimits& L, std::int64_t price) {
     if (!L.collar_bps) return RiskReject::None;

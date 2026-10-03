@@ -44,6 +44,7 @@ struct NewOrderStatic {
   WireSide side = WireSide::Buy;
   std::uint32_t trade_date = 0;  // YYYYMMDD, UTC date stamped in Transaction Time
   Tif tif = Tif::Day;            // Day is the default and is left out of the message
+  std::uint8_t order_capacity = 0;  // 1 = Agency, 2 = Principal; 0 = field left out
 };
 
 struct NewOrderVar {
@@ -82,6 +83,7 @@ class NewOrderTemplate {
     w.decimal(b::Price, 0);
     w.decimal(b::OrderQty, 0);
     if (s.tif != Tif::Day) w.u8(b::TimeInForce, static_cast<std::uint8_t>(s.tif));
+    if (s.order_capacity) w.u8(b::OrderCapacity, s.order_capacity);
     w.u16(b::DisclosureInstructions, kDisclosureNone);
     w.alnum(b::SubmittingBcan, s.bcan, fs::kBcan);
     size_ = w.finish();
@@ -231,6 +233,7 @@ inline std::size_t encode_new_order(std::uint8_t* buf, const NewOrderStatic& s, 
   w.decimal(b::Price, v.price);
   w.decimal(b::OrderQty, v.qty);
   if (s.tif != Tif::Day) w.u8(b::TimeInForce, static_cast<std::uint8_t>(s.tif));
+  if (s.order_capacity) w.u8(b::OrderCapacity, s.order_capacity);
   w.u16(b::DisclosureInstructions, kDisclosureNone);
   w.alnum(b::SubmittingBcan, s.bcan, fs::kBcan);
   return w.finish();
