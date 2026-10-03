@@ -130,9 +130,9 @@ gateway 佔的是「strategy 決策完成 → 封包離開」這一段，以及�
 
 ## 4. 分階段計畫
 
-1. **選協定與規格**：首選 **Nasdaq OUCH 5.0（SoupBinTCP）**——規格公開、binary、與已有的 ITCH 資料同一交易所；
-   之後再評估 HKEX OCG-C（與 OMD-C 對應，需確認規格取得方式）或 FIX 4.2/4.4 作為文字協定對照。
-2. **骨架**：`include/obl/gw/`——協定 encoder/decoder、session 狀態機、order state 表；單元測試先行。
+1. **選協定與規格**：初版採 **HKEX OCG-C Binary Trading Protocol v3.2**（規格在 HKEX 網站公開），
+   格式、checksum 與第一批量測見 [`ocgc_binary.md`](ocgc_binary.md)。之後可再加 FIX 作為文字協定對照。
+2. **骨架**：`include/obl/gw/`——協定 encoder/decoder（OCG-C New Order / Cancel 已完成）、session 狀態機、order state 表；單元測試先行。
 3. **模擬交易所**：以 L3 book 為核心的 matching engine，走 loopback TCP，回傳 OUCH 回報。
 4. **G1–G4**：純 CPU 的微基準（不經網路），沿用 `bench/` 的量測框架與 fork 隔離。
 5. **G5–G7**：跨執行緒與 socket 的量測。
@@ -140,6 +140,5 @@ gateway 佔的是「strategy 決策完成 → 封包離開」這一段，以及�
 
 ## 5. 待決定
 
-- 目標協定：OUCH 5.0 先行，或直接做 HKEX OCG-C？
 - 部署型態：先做 in-process library，還是一開始就做獨立行程 + shared-memory ring？
 - 範圍：是否包含 FIX（文字協定對照組）與 drop copy / 對帳？

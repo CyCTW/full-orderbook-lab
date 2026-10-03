@@ -1,0 +1,31 @@
+OCG-C New Order (limit, Day, mandatory fields): 184 bytes, checksum over 180 bytes
+tsc 2.800 GHz, 2000000 iterations; ns per message
+
+CRC32C over the message (header + body)
+  variant                             chained      p50      p99    p99.9
+  bitwise                              1867.0   1803.6   2075.4  24617.2
+  sarwate (1 table, 1 B/step)           455.7    437.5    455.7   4028.9
+  slice-by-8 (8 tables, 8 B/step)       121.2    112.5    203.6    962.1
+  sse4.2 crc32 (8 B/instr)               27.3     27.5     27.9    180.4
+  incremental (4 spans + pclmul)         12.3     13.6     20.7    167.5
+
+Encode New Order + checksum
+  variant                             chained      p50      p99    p99.9
+  writer + snprintf + hw crc            246.2    243.9    528.9   1236.1
+  writer + digit LUT + hw crc            44.6     50.0     89.3    206.8
+  template patch only (no crc)           20.6     17.5     30.7    131.4
+  template + sarwate crc                456.5    455.4    501.1   4632.1
+  template + slice-by-8 crc             127.3    121.1    205.4    484.6
+  template + hw crc                      31.8     36.1     53.6    190.7
+  template + incremental crc (reload)     18.8     35.7    118.6    200.7
+  template + incremental crc (regs)      17.4     24.6     29.6     41.8
+
+CRC32C chained ns vs length
+   bytes    sarwate     slice8         hw
+      32       84.4       25.5       10.5
+      64      168.5       44.3       15.4
+     128      325.4       82.0       21.5
+     180      466.7      128.9       28.3
+     256      664.6      157.2       35.6
+     512     1308.5      319.5       65.9
+    1024     2602.5      605.2      125.2
