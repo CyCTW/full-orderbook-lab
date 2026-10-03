@@ -1,0 +1,35 @@
+95191963 events in 93761480 packets; 11559 packets with >= 20 messages (0.44% of messages); tsc 2.800 GHz
+
+view-first depth cache: 32 levels per side
+book: dense_array + open_addressing, publish = top-5 snapshot when changed
+                         |           all messages |        msgs in packets >= big |    last msg of big pkt |   first msg of big pkt |    total   pubs/
+strategy                 |    p50     p99   p99.9 |    p50     p99   p99.9        |    p50     p99   p99.9 |    p50     p99   p99.9 |  seconds     msg
+per-message              |    205     715    7495 |   3981   29503   54517        |   7475   35656   68087 |    195     749   22082 |    28.72    0.59
+prefetch                 |    219     711    6376 |   3001   30505   61751        |   5466   45934   80909 |    372    1152   23142 |    28.96    0.59
+conflate                 |    234     818    7565 |   4593   36225   95099        |   4507   36046  101360 |   4504   36046  101360 |    30.34    0.58
+prefetch + conflate      |    233     783    5704 |   3391   29713   68534        |   3305   29713   69547 |   3303   29649   69547 |    30.12    0.58
+view-first               |     91     550    3125 |   1171   13529   29723        |   1888   18121   39215 |     93     529     945 |    31.59    0.59
+view-first + prefetch    |     93     530    2595 |   1562    6045   27534        |   2426    7686   33005 |    289     934    2830 |    28.40    0.59
+view-first + conflate    |     93     568    4784 |   1287   12751   31930        |   1459   12657   32843 |   1068   12089   31422 |    30.17    0.58
+view-first + pf + confl  |     96     558    3359 |   1671    6260   34197        |   1840    6504   35057 |   1449    5791   32657 |    27.74    0.58
+
+whole-packet completion (incl. deferred L3 work), packets >= 20 msgs; view-first refills / deferred decisions:
+per-message              pkt done p50    7501 p99   35674 ns   refills 0, deferred 0
+prefetch                 pkt done p50    5498 p99   45951 ns   refills 0, deferred 0
+conflate                 pkt done p50    4631 p99   36307 ns   refills 0, deferred 0
+prefetch + conflate      pkt done p50    3433 p99   29842 ns   refills 0, deferred 0
+view-first               pkt done p50    6201 p99   46972 ns   refills 4581, deferred 0
+view-first + prefetch    pkt done p50    4927 p99   36069 ns   refills 4581, deferred 0
+view-first + conflate    pkt done p50    5310 p99   45205 ns   refills 4581, deferred 0
+view-first + pf + confl  pkt done p50    4636 p99   32383 ns   refills 4581, deferred 0
+
+mean latency (ns) by position in packets of >= 20 messages:
+position                       1       5      10      15      20      30      40      50      64+
+per-message                  273    1303    2629    3948   23537   28694   12773       0       0
+prefetch                     497    1538    2874    4304   15107   18977    7083       0       0
+conflate                   10284   10286   10286   10286   10286   11040    7446       0       0
+prefetch + conflate        10554   10555   10555   10555   10555   11385    4728       0       0
+view-first                   143     576    1066    1548    2039    2716   11846       0       0
+view-first + prefetch        347     755    1182    1538    1887    2497    5343       0       0
+view-first + conflate       2171    2223    2283    2338    2392    2495    9130       0       0
+view-first + pf + confl     1940    1996    2052    2107    2163    2271    4852       0       0
