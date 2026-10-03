@@ -1,0 +1,17 @@
+95191963 events in 93761480 packets; 11559 packets with >= 20 messages (0.44% of messages); tsc 2.800 GHz
+
+view-first depth cache: 10 levels per side
+book: hybrid(4K window+btree) + open_addressing, publish = top-5 snapshot when changed
+                         |           all messages |        msgs in packets >= big |    last msg of big pkt |   first msg of big pkt |    total   pubs/
+strategy                 |    p50     p99   p99.9 |    p50     p99   p99.9        |    p50     p99   p99.9 |    p50     p99   p99.9 |  seconds     msg
+per-message              |    231     782    8093 |   4334   17433   41319        |   8327   34592   50374 |    241     861    3105 |    29.29    0.59
+view-first               |     75     494    2876 |   1211   12020   32372        |   2169   16676   41574 |    112     508     817 |    28.62    0.59
+
+whole-packet completion (incl. deferred L3 work), packets >= 20 msgs; view-first refills / deferred decisions:
+per-message              pkt done p50    8349 p99   34611 ns   refills 0, deferred 0
+view-first               pkt done p50    9975 p99   53604 ns   refills 106486, deferred 0
+
+mean latency (ns) by position in packets of >= 20 messages:
+position                       1       5      10      15      20      30      40      50      64+
+per-message                  289    1338    2618    3878    7790   10540   13719       0       0
+view-first                   145     568    1065    1544    2026    2761   10882       0       0
