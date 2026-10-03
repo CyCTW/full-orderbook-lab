@@ -1,0 +1,46 @@
+OCG-C New Order (limit, Day, mandatory fields): 184 bytes, checksum over 180 bytes
+tsc 2.800 GHz, 2000000 iterations; ns per message
+
+CRC32C over the message (header + body)
+  variant                             chained      p50      p99    p99.9
+  bitwise                              1859.1   1796.8   1946.4  23165.7
+  sarwate (1 table, 1 B/step)           451.4    440.7    485.0   4137.5
+  slice-by-8 (8 tables, 8 B/step)       123.0    121.1    170.0    294.6
+  sse4.2 crc32 (8 B/instr)               28.4     26.8     33.6    183.2
+  incremental (4 spans + pclmul)         13.1     13.2     21.8    168.6
+
+Encode New Order + checksum
+  variant                             chained      p50      p99    p99.9
+  writer + snprintf + hw crc            289.2    277.1    707.9   3631.8
+  writer + digit LUT + hw crc            65.0     74.3    122.1    216.8
+  template patch only (no crc)           11.0     19.3     27.1     42.5
+  template + sarwate crc                452.4    451.1    487.1   1323.2
+  template + slice-by-8 crc             127.1    131.1    191.8    330.4
+  template + hw crc                      29.4     37.5     45.7    182.5
+  template + incremental crc (reload)     19.7     34.3     41.8    172.5
+  template + incremental crc (regs)      16.1     26.4     33.2     43.2
+
+Execution Report (trade, 264 bytes): receive path
+  variant                             chained      p50      p99    p99.9
+  crc verify only (hw)                   36.8     36.1     41.4    191.4
+  field walk: test 256 bits             285.7    240.7    463.9    510.0
+  field walk: clz over 4 words           45.9     48.9     60.7     92.9
+  decode_exec_report                     50.7     53.2     77.9    237.5
+  verify + decode + parse ClOrdID        75.2     75.0    119.3    276.4
+  Session::on_bytes (1 report)           87.7     81.4    152.9    310.0
+  (first column for this row: mean of the fenced per-call times, not chained)
+
+Session::send_new_order (fill_regs + send + store)
+  variant                             chained      p50      p99    p99.9
+  store reserved, not touched           109.0     31.1   1659.3   3025.7
+  store prefaulted                       49.8     39.3    265.0    547.9
+
+CRC32C chained ns vs length
+   bytes    sarwate     slice8         hw
+      32       87.3       24.9       10.3
+      64      164.1       44.8       14.1
+     128      350.4       84.7       21.3
+     180      461.2      126.1       29.2
+     256      655.6      166.3       35.7
+     512     1312.5      318.0       64.8
+    1024     2608.6      625.6      124.0

@@ -5,8 +5,9 @@ v3.2（2023-07-19，加入 Self-Match Prevention）。OCG-C 官方頁面目前�
 [Self-Match Prevention 頁面](https://www.hkex.com.hk/-/media/HKEX-Market/Services/Trading/Securities/Overview/Trading-Mechanism/Self-Match-Prevention/HKEX_OCGC_Binary_Trading_Interface_Specifications_v3_2-(Markedup).pdf)。
 以下 §x.y 皆指該文件章節。
 
-程式：`include/obl/gw/ocgc/`（`protocol.hpp`、`crc32c.hpp`、`order_template.hpp`），
-測試 `tests/test_ocgc.cpp`，benchmark `bench/ocgc_bench.cpp`。
+程式：`include/obl/gw/ocgc/`（`protocol.hpp` 欄位表與 Writer/Reader、`crc32c.hpp`、`order_template.hpp`、
+`messages.hpp` session 訊息與 Execution Report、`session.hpp` session 狀態機），
+測試 `tests/test_ocgc.cpp`、`tests/test_ocgc_session.cpp`，benchmark `bench/ocgc_bench.cpp`。
 
 ## 1. 訊息結構
 
@@ -118,9 +119,112 @@ CRC32C 正好是 x86 SSE4.2 `crc32` 指令的多項式，可以硬體計算。
 
 p99.9 普遍有 ~170 ns 的尾巴，在多數變體都出現，推測是 VM 的中斷 / 計時干擾，不是程式本身。
 
-## 5. 下一步
+## 5. Execution Report 與接收路徑
 
-- Cancel (13) / Amend (12) 模板、Execution Report (10) 解碼
-- Session 層：Lookup → Logon（RSA 加密密碼）→ Heartbeat / Test Request → Resend / Sequence Reset
-- 模擬 OCG-C（以 L3 book 撮合），走 loopback TCP，量整條送單 → 回報
-- warm-up：送單很稀疏時，模板與 CRC 常數是否還在 cache
+### 5.1 格式
+
+Execution Report (10) 所有種類（接受、拒絕、撤單、改單、成交、成交取消…）共用一張 bit 表（§7.6.7），
+出現哪些欄位由 Exec Type 決定。常用欄位：
+
+| bit | 欄位 | 型別 |
+|---:|---|---|
+| 0 / 8 / 9 | Client Order ID / Original Client Order ID / Order ID | Alnum(21) |
+| 21 | Execution ID（每則回報唯一，用來去重） | Alnum(21) |
+| 22 | Order Status：0 New、1 部分成交、2 全部成交、4 已撤、8 拒絕、12 過期… | UInt8 |
+| 23 | Exec Type：`'0'` New、`'4'` Cancel、`'5'` Amend、`'8'` Reject、`'F'` Trade、`'H'` Trade Cancel、`'X'`/`'Y'` 撤單/改單被拒 | Byte（ASCII） |
+| 24 / 25 | Cumulative / Leaves Quantity | Decimal |
+| 26 / 29 / 36 | 拒絕原因碼（新單 / 撤單 / 改單） | UInt16 |
+| 32 / 33 | 這次成交的數量 / 價格 | Decimal |
+| 38 / 42 | Trade Match ID / Aggressor Indicator | Alnum(25) / UInt8 |
+
+一則典型的部分成交回報 264 bytes。presence map 出現未定義的 bit（例如 37）時無法得知欄位長度，
+解碼直接失敗，不會猜長度往下讀。
+
+### 5.2 量測（264 bytes 成交回報，3 次執行；`results/ocgc/2026-10-03_session_run{1,2,3}.txt`）
+
+| 步驟 | 單次 p50 | 單次 p99 |
+|---|---:|---:|
+| 只驗 CRC | 36 ns | 39–65 |
+| 走訪欄位：逐一測 256 個 bit | 240 ns | 420–460 |
+| 走訪欄位：4 個 64-bit word + count-leading-zeros | 49 ns | 50–61 |
+| `decode_exec_report`（欄位延遲量長度） | 53 ns | 59–78 |
+| 驗 CRC + 解碼 + ClOrdID 轉數字 | 75 ns | 119–158 |
+| **`Session::on_bytes` 整條**（切 frame、CRC、序號檢查、分派、解碼） | **81 ns** | 131–192 |
+
+觀察：
+
+1. **presence map 不要逐 bit 測**：一則回報只有 ~20 個欄位，但逐 bit 要跑 256 次迴圈與分支（240 ns）。
+   改成把 32 bytes 當 4 個 big-endian 64-bit word，用 `countl_zero` 直接跳到下一個 1，降到 49 ns。
+2. **字串欄位延後量長度**：Alnum 欄位要找 NUL 才知道長度，每個欄位一次 `memchr`。
+   解碼時只記指標與容量（`LazyStr`），用到才找 NUL，解碼 68 → 53 ns。實際上策略通常只看 ClOrdID 與數量。
+3. 接收端 CRC 沒辦法用增量技巧（每則內容都是新的），264 bytes 就是 ~36 ns，佔整條接收路徑近一半。
+
+## 6. Session 層
+
+`include/obl/gw/ocgc/session.hpp`。不碰 socket、不讀時鐘、不在送單路徑配置記憶體：
+外部餵進收到的 bytes、連線事件與時間，它透過 Transport 送出、透過 Handler 回報。
+同一份程式可以接 TCP、kernel bypass 或測試用的假對手（`tests/test_ocgc_session.cpp`）。
+
+### 6.1 狀態與規則（§4、§5）
+
+```
+Disconnected --on_connected--> LogonSent --收到 Logon(Status 0/1)--> Active --logout()--> LogoutSent
+     ^                             |  60 s 無回應 / 收到 Logout、Reject            |  收到 Logout 回覆 / 60 s
+     +-----------------------------+------------------------------------------------+
+```
+
+| 情況 | 處理 |
+|---|---|
+| 序號 | 雙向各自從 1 開始、跨重連延續，每天重設（`reset_sequences`） |
+| LogonSent 期間送單 | 直接回 false（§4.1：送了會被斷線） |
+| 收到序號 > 預期 | 送一次 Resend Request(預期, 0)，亂序訊息丟掉等重播；追上前不再送第二次 |
+| 收到序號 < 預期 | PossDup = 1 就忽略，否則送 Logout 並斷線 |
+| 收到 Logon 回覆 | **不因 Logon 的序號送 Resend Request**（§5.3）：OCG-C 會從我們的 Next Expected 開始重播，並用 gap fill 跳過它自己 Logon 的序號 |
+| Logon 回覆的 Next Expected < 我們的下一個序號 | 我們照樣重播，並 gap fill 掉自己的 Logon |
+| Next Expected > 我們送過的 | 送 Logout 並斷線（§5.3：需人工處理） |
+| 對方 Resend Request | Session 層訊息（Logon、Heartbeat…）用 Sequence Reset gap fill 跳過；業務訊息依 ReplayPolicy |
+| 20 s 沒送東西 | 送 Heartbeat |
+| 60 s 沒收到東西 | 送 Test Request；再 60 s 沒回應 → Logout 並斷線 |
+| CRC 錯誤 | 不送 Logout，直接斷線（§4.8） |
+
+### 6.2 重播業務訊息：規格 vs 我們之前討論的做法
+
+§5.6 規定：除了 Session 層訊息以外，「所有其他訊息都應該重播」。也就是說，OCG-C 沒收到的 New Order，
+client 被要求在重連後**補送**。這跟先前的討論（過時的單應該回拒絕給策略、不要晚送）衝突，所以做成可設定：
+
+- `ReplayPolicy::Replay`（預設，照規格）：業務訊息以原序號、PossDup = 1 重播
+- `ReplayPolicy::GapFillBusiness`：業務訊息也用 gap fill 跳過，並對每一筆呼叫 `Handler::on_not_sent`，
+  讓策略知道這張單從未到達交易所
+
+GapFillBusiness 是否被 OCG-C 接受，規格沒有明說（只說「expected to be replayed」），上線前要跟 HKEX 確認。
+
+注意 PossResend：OCG-C 斷線期間產生的回報，重連後可能用**新序號**加 PossResend = 1 再送一次（§5.5.2、§5.7），
+所以 Handler 要用 Execution ID 去重，Session 層看序號是分辨不出來的。
+
+### 6.3 送單路徑上的 message store
+
+重播需要保留今天送出的每一則訊息。`send_new_order` 先把 bytes 交給 Transport，**之後**才複製進 store，
+store 的成本不會延後封包送出，但會延後下一筆單。
+
+| `Session::send_new_order`（fill_regs + send + store） | 單次 p50 | p99 | p99.9 |
+|---|---:|---:|---:|
+| store 只 `reserve()`，記憶體還沒碰過 | 31 ns | **1,616–1,753 ns** | 3.0–3.1 µs |
+| **store 啟動時先把每一頁寫過一次（prefault）** | 30–39 ns | **216–265 ns** | 485–548 ns |
+
+`reserve()` 只保留位址空間，第一次寫入每個 4 KiB 頁面時才觸發 page fault（約每 22 筆單一次，每次 µs 等級）。
+啟動時先寫過一遍（`SessionConfig::prefault_store`，預設開）後 p99 降到約 1/7。剩下約 220 ns 的 p99，
+推測是寫入從沒碰過的 cache line 所造成的 cache miss（store 一直往新記憶體寫），之後可以試 non-temporal store
+或改成重複使用的環狀緩衝區。
+
+### 6.4 尚未處理
+
+- Lookup Service（先問 IP / port）與 RSA 密碼加密：目前 `encrypted_password` 由外部提供
+- Throttle：超過每秒訊息上限時 OCG-C 回 Business Message Reject（§6.12），還沒有本地端的流量控制
+- 委託狀態表與 ExecID 去重：目前只把回報交給 Handler
+
+## 7. 下一步
+
+- 委託狀態表（ClOrdID 當陣列索引）+ Execution Report 套用（G2）
+- 模擬 OCG-C：用 L3 book 撮合，走 loopback TCP，量送單 → 回報的往返時間
+- Throttle（token bucket，撤單優先）
+- warm-up：送單很稀疏時，模板、CRC 常數與 session 狀態是否還在 cache

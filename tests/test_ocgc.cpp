@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "check.hpp"
+#include "obl/gw/ocgc/messages.hpp"
 #include "obl/gw/ocgc/order_template.hpp"
 
 using namespace obl;
@@ -194,6 +195,94 @@ void test_template_matches_reference() {
 #endif
 }
 
+void test_exec_report_roundtrip() {
+  namespace b = exec_report;
+  ExecReport er;
+  er.present = 1ull << b::ClOrdId | 1ull << b::SubmittingBrokerId | 1ull << b::SecurityId | 1ull << b::SecurityIdSource |
+               1ull << b::SecurityExchange | 1ull << b::TransactTime | 1ull << b::Side | 1ull << b::OrderId |
+               1ull << b::OrdType | 1ull << b::Price | 1ull << b::OrderQty | 1ull << b::Reason | 1ull << b::ExecId |
+               1ull << b::OrdStatus | 1ull << b::ExecType | 1ull << b::CumQty | 1ull << b::LeavesQty |
+               1ull << b::ExecQty | 1ull << b::ExecPrice | 1ull << b::TradeMatchId | 1ull << b::AggressorIndicator;
+  er.cl_ord_id = "12345678";
+  er.submitting_broker_id = "1234";
+  er.security_id = "700";
+  er.transact_time = "20261003-01:02:03.456789";
+  er.side = 2;
+  er.order_id = "77777";
+  er.ord_type = 2;
+  er.price = 400 * kDecimalScale;
+  er.order_qty = 300 * kDecimalScale;
+  er.reason = "partial";
+  er.exec_id = "EX1";
+  er.ord_status = OrdStatus::PartiallyFilled;
+  er.exec_type = ExecType::Trade;
+  er.cum_qty = 100 * kDecimalScale;
+  er.leaves_qty = 200 * kDecimalScale;
+  er.exec_qty = 100 * kDecimalScale;
+  er.exec_price = 400 * kDecimalScale;
+  er.trade_match_id = "TM9";
+  er.aggressor = 1;
+  std::uint8_t buf[512];
+  const std::size_t n = encode_exec_report(buf, 9, "OCGC", er);
+  CHECK(valid_frame(buf, n));
+  ExecReport d;
+  CHECK(decode_exec_report(buf, n, d));
+  CHECK_EQ(d.present, er.present);
+  CHECK(d.cl_ord_id == "12345678" && d.order_id == "77777" && d.exec_id == "EX1" && d.reason == "partial");
+  CHECK(d.trade_match_id == "TM9" && d.transact_time == er.transact_time && d.submitting_broker_id == "1234");
+  CHECK(d.exec_type == ExecType::Trade && d.ord_status == OrdStatus::PartiallyFilled);
+  CHECK_EQ(d.price, er.price);
+  CHECK_EQ(d.exec_qty, er.exec_qty);
+  CHECK_EQ(d.leaves_qty, er.leaves_qty);
+  CHECK_EQ(d.aggressor, 1);
+  CHECK(d.has(b::TradeMatchId) && !d.has(b::OrigClOrdId));
+  CHECK_EQ(parse_cl_ord_id(d.cl_ord_id), 12345678u);
+  CHECK_EQ(parse_cl_ord_id("0123"), 0u);
+  CHECK_EQ(parse_cl_ord_id("123456789"), 0u);
+
+  // unknown presence bit (37 is not defined for Execution Report) -> rejected, not misparsed
+  buf[hdr::kPresenceMap + 37 / 8] |= 0x80 >> (37 % 8);
+  store_le<std::uint32_t>(buf + n - 4, checksum(buf, n - 4));
+  CHECK(!decode_exec_report(buf, n, d));
+
+  // Business Message Reject
+  Writer w(buf, MsgType::BusinessMessageReject, 3, "OCGC");
+  w.u16(business_reject::BusinessRejectCode, 2)
+      .var_alnum(business_reject::Reason, "throttle: 120 ms left")
+      .u8(business_reject::RefMsgType, 11)
+      .u32(business_reject::RefSeqNum, 41)
+      .alnum(business_reject::BusinessRejectRefId, "10000005", field_size::kClOrdId);
+  const std::size_t m = w.finish();
+  RejectInfo r;
+  CHECK(valid_frame(buf, m));
+  CHECK(decode_reject(buf, m, MsgType::BusinessMessageReject, r));
+  CHECK_EQ(r.code, 2);
+  CHECK(r.reason == "throttle: 120 ms left");
+  CHECK_EQ(r.ref_msg_type, 11);
+  CHECK_EQ(r.ref_seq, 41u);
+  CHECK(r.ref_id == "10000005");
+}
+
+void test_presence_map_high_bits() {
+  // fields at bits 63, 64 and 200 cross the 64-bit words of the presence map
+  FieldTable t{};
+  t[63] = {FieldKind::UInt8, 1, "a"};
+  t[64] = {FieldKind::UInt32, 4, "b"};
+  t[200] = {FieldKind::Decimal, 8, "c"};
+  std::uint8_t buf[256];
+  Writer w(buf, MsgType::NewOrder, 1, "X");
+  w.u8(63, 7).u32(64, 0xDEADBEEF).decimal(200, -5);
+  const std::size_t n = w.finish();
+  std::vector<unsigned> bits;
+  CHECK(for_each_field(buf, n, t, [&](const FieldRef& f) {
+    bits.push_back(f.bit);
+    if (f.bit == 63) CHECK_EQ(as_u8(f), 7);
+    if (f.bit == 64) CHECK_EQ(as_u32(f), 0xDEADBEEFu);
+    if (f.bit == 200) CHECK_EQ(as_decimal(f), -5);
+  }));
+  CHECK((bits == std::vector<unsigned>{63, 64, 200}));
+}
+
 }  // namespace
 
 int main() {
@@ -203,5 +292,7 @@ int main() {
   test_new_order_layout();
   test_optional_and_variable_fields();
   test_template_matches_reference();
+  test_exec_report_roundtrip();
+  test_presence_map_high_bits();
   return test_result("test_ocgc");
 }
