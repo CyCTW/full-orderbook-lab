@@ -31,6 +31,7 @@
 #include <chrono>
 #include <cstdio>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -300,9 +301,9 @@ double pct(std::vector<std::uint32_t>& v, double q) {
 
 template <class Book>
 void run_all(const std::vector<Event>& ev, const std::vector<std::uint32_t>& sizes, std::size_t k, std::uint32_t big,
-             double publish_ns, bool top5, int cache_depth) {
+             double publish_ns, bool top5, int cache_depth, const std::vector<std::string>& only_modes) {
   const std::uint64_t spin = static_cast<std::uint64_t>(publish_ns * tsc_ghz());
-  if (top5) std::printf("\nview-first depth cache: %d levels per side", cache_depth >= 32 ? 32 : 10);
+  if (top5) std::printf("\nview-first depth cache: %d levels per side", cache_depth);
   std::printf("\nbook: %s, publish = %s%s\n", Book::name().c_str(),
               top5 ? "top-5 snapshot when changed" : "top-of-book record per message",
               publish_ns > 0 ? (" + " + std::to_string(static_cast<int>(publish_ns)) + " ns downstream work").c_str() : "");
@@ -316,10 +317,18 @@ void run_all(const std::vector<Event>& ev, const std::vector<std::uint32_t>& siz
   if (top5)
     for (Mode m : {Mode::ViewFirst, Mode::ViewFirstPrefetch, Mode::ViewFirstConflate, Mode::ViewFirstPrefetchConflate})
       modes.push_back(m);
+  const auto top5_run = [&](Mode m) {
+    switch (cache_depth) {
+      case 5: return run_top5<Book, 5>(m, ev, sizes, k, big, spin);
+      case 16: return run_top5<Book, 16>(m, ev, sizes, k, big, spin);
+      case 32: return run_top5<Book, 32>(m, ev, sizes, k, big, spin);
+      default: return run_top5<Book, 10>(m, ev, sizes, k, big, spin);
+    }
+  };
   for (Mode m : modes) {
-    Stats st = !top5 ? run<Book>(m, ev, sizes, k, big, spin)
-               : cache_depth >= 32 ? run_top5<Book, 32>(m, ev, sizes, k, big, spin)
-                                   : run_top5<Book, 10>(m, ev, sizes, k, big, spin);
+    if (!only_modes.empty() && std::find(only_modes.begin(), only_modes.end(), mode_name(m)) == only_modes.end())
+      continue;
+    Stats st = !top5 ? run<Book>(m, ev, sizes, k, big, spin) : top5_run(m);
     if (!ref) ref = st.checksum;
     std::printf("%-24s | %6.0f %7.0f %7.0f | %6.0f %7.0f %7.0f %6s | %6.0f %7.0f %7.0f | %6.0f %7.0f %7.0f | %8.2f %7.2f%s\n",
                 mode_name(m), pct(st.all, 0.5), pct(st.all, 0.99), pct(st.all, 0.999), pct(st.big_all, 0.5),
@@ -354,7 +363,8 @@ int main(int argc, char** argv) {
   tools::Args args(argc, argv);
   if (!args.has("events")) {
     std::puts("usage: obl_burst --events X.ev [--packets X.pkt] [--book dense|dense-ankerl|map] [--publish-ns N]\n"
-              "                 [--k 8] [--big 20] [--top5 [--cache-depth 10|32]]");
+              "                 [--k 8] [--big 20] [--top5 [--cache-depth 5|10|16|32]] [--modes a,b]\n"
+              "  books: dense hybrid vector vector-bin map-oa btree dense-ankerl map");
     return 1;
   }
   const std::string evp = args.str("events", "");
@@ -384,12 +394,31 @@ int main(int argc, char** argv) {
   const std::string which = args.str("book", "dense");
   const double publish_ns = args.num("publish-ns", 0);
   const bool top5 = args.has("top5");
-  const int cache_depth = static_cast<int>(args.u64("cache-depth", 10));  // 10 or 32
-  if (which == "dense") run_all<book::ArrayOpenBook>(ev, sizes, k, big, publish_ns, top5, cache_depth);
-#ifdef OBL_HAVE_UNORDERED_DENSE
-  else if (which == "dense-ankerl") run_all<book::ArrayDenseBook>(ev, sizes, k, big, publish_ns, top5, cache_depth);
+  const int cache_depth = static_cast<int>(args.u64("cache-depth", 10));  // 5, 10, 16 or 32
+  if (cache_depth != 5 && cache_depth != 10 && cache_depth != 16 && cache_depth != 32) {
+    std::printf("--cache-depth must be 5, 10, 16 or 32\n");
+    return 1;
+  }
+  std::vector<std::string> only_modes;  // --modes "per-message,view-first" (exact strategy names)
+  {
+    std::stringstream ss(args.str("modes", ""));
+    for (std::string t; std::getline(ss, t, ',');)
+      if (!t.empty()) only_modes.push_back(t);
+  }
+  const auto go = [&]<class B>() { run_all<B>(ev, sizes, k, big, publish_ns, top5, cache_depth, only_modes); };
+  // price-level structures below all use the open-addressing index (isolates the level container)
+  if (which == "dense") go.template operator()<book::ArrayOpenBook>();
+  else if (which == "hybrid") go.template operator()<book::Hybrid4kOpenBook>();
+  else if (which == "vector") go.template operator()<book::VecLinearBook>();
+  else if (which == "vector-bin") go.template operator()<book::VecBinaryBook>();
+  else if (which == "map-oa") go.template operator()<book::MapOpenBook>();
+#ifdef OBL_HAVE_ABSEIL
+  else if (which == "btree") go.template operator()<book::BTreeOpenBook>();
 #endif
-  else if (which == "map") run_all<book::MapStdBook>(ev, sizes, k, big, publish_ns, top5, cache_depth);
+#ifdef OBL_HAVE_UNORDERED_DENSE
+  else if (which == "dense-ankerl") go.template operator()<book::ArrayDenseBook>();
+#endif
+  else if (which == "map") go.template operator()<book::MapStdBook>();
   else {
     std::printf("unknown --book %s\n", which.c_str());
     return 1;

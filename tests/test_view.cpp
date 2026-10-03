@@ -162,6 +162,9 @@ int main() {
       // a 6-level cache drops below the published 5 constantly: stresses the refill path
       check_engine<ArrayOpenBook, 6>(deep, 4, conflate, k);
       check_engine<ArrayOpenBook, 6>(thin, 5, conflate, k);
+      // exactly the published depth: every cleared level forces a refill
+      check_engine<ArrayOpenBook, 5>(deep, 6, conflate, k);
+      check_engine<ArrayOpenBook, 5>(thin, 7, conflate, k);
     }
   return test_result("test_view");
 }
