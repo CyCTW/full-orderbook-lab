@@ -1,0 +1,64 @@
+tsc 2.800 GHz, 300000 calls per row, cpu 2, ns per call
+
+H  encode one New Order + checksum
+  variant                                             p50      p99    p99.9
+  Writer + snprintf + table CRC (1 byte/step)       665.0   1017.1  16783.2
+  Writer + snprintf + hardware CRC                  497.1    583.9   4974.6
+  template + fill_regs (registers, incremental CRC)     20.4     26.4     35.0
+
+B  Client Order ID into the message (8-byte span)
+  variant                                             p50      p99    p99.9
+  snprintf, IDs from 1 (variable length)             42.5    127.1    241.8
+  to_chars, IDs from 1 (variable length)             10.4     17.9     21.8
+  digit-pair LUT, fixed 8 digits, 4 x 2-byte stores      7.9     13.2     15.7
+  fixed 8 digits built as one word, 1 store           7.9     13.9     16.4
+
+A  request ID -> order slot (send: insert, report: look up a recent ID)
+  variant                                             p50      p99    p99.9
+  unordered_map, no reserve: insert                  30.4    103.2   2157.9
+  unordered_map: look up                             16.4    352.5    670.4
+  unordered_map, reserved: insert                    30.0     60.0   1800.7
+  dense array (ID - base = index): insert             2.5      5.0      9.3
+  dense array: look up                                3.2     10.7    173.2
+
+C  report updates a random order: 64-byte record vs 128-byte (cold fields inline)
+  variant                                             p50      p99    p99.9
+     4096 orders, 64 B  (   0.2 MiB)                  9.3     15.4     43.9
+     4096 orders, 128 B (   0.5 MiB)                 10.7     31.8     92.5
+    16384 orders, 64 B  (   1.0 MiB)                 11.8    155.4    370.0
+    16384 orders, 128 B (   2.0 MiB)                 26.8    167.1    477.5
+    65536 orders, 64 B  (   4.0 MiB)                146.8    465.4    583.2
+    65536 orders, 128 B (   8.0 MiB)                143.2    457.9    574.6
+   262144 orders, 64 B  (  16.0 MiB)                141.4    471.4    591.1
+   262144 orders, 128 B (  32.0 MiB)                130.0    481.1    647.1
+  1048576 orders, 64 B  (  64.0 MiB)                139.3    483.9    755.7
+  1048576 orders, 128 B ( 128.0 MiB)                157.9    523.2    719.6
+
+D  open buy quantity for a risk check: running total vs sum over live orders
+  variant                                             p50      p99    p99.9
+  sum over 10 live orders                             6.4     11.8     18.6
+  sum over 100 live orders                           62.5     97.9    237.1
+  sum over 1000 live orders                         797.9   1334.6  19495.4
+  running total (Position::open_buy_qty)              0.7      4.6      7.1
+
+E  gross open notional for a risk check: running total vs loop over symbols
+  variant                                             p50      p99    p99.9
+  loop over 10 symbols                                7.1     15.7     21.4
+  loop over 100 symbols                              47.9    101.8    163.9
+  loop over 1000 symbols                            610.7   1093.9  17436.8
+  running total (OrderTable::gross_open_notional)      1.8      6.1      7.9
+
+F  10 counter increments (one per send-path event)
+  variant                                             p50      p99    p99.9
+  atomic fetch_add (lock xadd)                       57.1     71.8    221.8
+  single-writer relaxed load + store                  6.4     11.1     17.9
+
+G  fill + send: time until the bytes are handed over
+  variant                                             p50      p99    p99.9
+  bookkeeping before send (store, audit, counters)     19.3     63.2    210.0
+  send first, bookkeeping after                      10.0     21.4     26.8
+
+G' message store append: memory reserved only vs touched up front
+  variant                                             p50      p99    p99.9
+  reserve() only (page fault every ~22 messages)     13.9  22193.6  38071.8
+  prefaulted                                          7.9    145.4    327.9

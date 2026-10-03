@@ -101,6 +101,9 @@ target_link_libraries(obl_ocgc_demo PRIVATE obl)
 add_executable(obl_ocgc_audit tools/ocgc_audit.cpp)
 target_link_libraries(obl_ocgc_audit PRIVATE obl)
 
+add_executable(obl_gw_ablation bench/gw_ablation.cpp)
+target_link_libraries(obl_gw_ablation PRIVATE obl)
+
 add_executable(obl_gw_bench bench/gw_bench.cpp)
 target_link_libraries(obl_gw_bench PRIVATE obl Threads::Threads)
 
