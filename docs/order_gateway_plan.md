@@ -37,8 +37,13 @@ gateway 佔的是「strategy 決策完成 → 封包離開」這一段，以及�
 ### 2.1 Session / 連線管理
 
 - 登入 / 登出、帳號認證、heartbeat / test request、斷線偵測（timeout）
-- **序號管理**：outbound / inbound sequence number 持久化；重連後 resend / gap fill
-  （OUCH 走 SoupBinTCP，FIX 有 ResendRequest / SequenceReset）
+- **序號管理與斷線恢復**：sequence number 持久化；重連後的重點是**向交易所補收**斷線期間漏掉的回報
+  （ack / fill / 交易所主動撤單），把 order state 對齊，而不是補送舊委託
+  - OUCH（SoupBinTCP）：只有交易所→客戶端有序號，login 帶要求的序號即可重播；客戶端送出的委託沒有序號、不重送
+  - FIX：雙向都有序號；對方要求重送時，過時的委託應以 SequenceReset-GapFill 跳過，而不是真的重送
+  - 斷線前已送出、未收到 ack 的委託屬未知狀態，要等重播回報（或查詢委託狀態）才能確定
+  - 斷線期間 strategy 送來的新單：**直接拒絕回 strategy**（原因：session down），不排隊；
+    恢復並對帳完成後通知 strategy，由它依當下行情重新決策
 - 多 session：交易所通常限制每 session 的訊息速率，需要把單分散到多條 session
 - Primary / backup gateway 切換（交易所端多個 gateway IP；本地端熱備援）
 - Cancel-on-disconnect 設定（斷線時交易所自動撤單）
