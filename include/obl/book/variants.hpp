@@ -5,6 +5,7 @@
 // Matrix: every level container with the open-addressing index (isolates the
 // level structure), and every index with the dense array (isolates the index).
 
+#include "obl/book/agg_book.hpp"
 #include "obl/book/l3_book.hpp"
 #include "obl/book/levels_array.hpp"
 #include "obl/book/levels_map.hpp"
@@ -56,6 +57,11 @@ using Hybrid1kOpenBook = L3Book<Hybrid1kLevels, OA>;
 using ArrayOpenVqBook = L3Book<DenseArrayLevels, OA, VectorQueues>;
 using ArrayCompactVqBook = L3Book<DenseArrayLevels, CompactOrderIndex, VectorQueues>;
 using VecLinearCompactVqBook = L3Book<LinearVectorLevels, CompactOrderIndex, VectorQueues>;
+// aggregate levels only (no queue position): same node, no FIFO links; and
+// order data inlined into the hash table (one memory access per lookup)
+using ArrayOpenAggBook = L3Book<DenseArrayLevels, OA, AggregateQueues>;
+using ArrayCompactAggBook = L3Book<DenseArrayLevels, CompactOrderIndex, AggregateQueues>;
+using ArrayInlineAggBook = AggBook<DenseArrayLevels>;
 #ifdef OBL_HAVE_ABSEIL
 using BTreeOpenBook = L3Book<BTreeLevels, OA>;
 using ArrayAbslBook = L3Book<DenseArrayLevels, AbslOrderIndex>;
@@ -88,6 +94,10 @@ void for_each_variant(F&& f) {
   f.template operator()<ArrayOpenVqBook>();
   f.template operator()<ArrayCompactVqBook>();
   f.template operator()<VecLinearCompactVqBook>();
+  // aggregate only (no queue position)
+  f.template operator()<ArrayOpenAggBook>();
+  f.template operator()<ArrayCompactAggBook>();
+  f.template operator()<ArrayInlineAggBook>();
 #ifdef OBL_HAVE_UNORDERED_DENSE
   f.template operator()<ArrayDenseBook>();
 #endif

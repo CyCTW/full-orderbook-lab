@@ -91,4 +91,32 @@ inline void level_unlink(Level& l, OrderPool& pool, std::uint32_t i) {
   --l.count;
 }
 
+// Hash of one resting order, summed over all orders (order independent).
+inline std::uint64_t order_hash(SymbolId sym, OrderId id, Side side, Price price, Qty qty) {
+  std::uint64_t h = mix64(id ^ (std::uint64_t(sym) << 1 | static_cast<std::uint64_t>(side)));
+  h = mix64(h ^ static_cast<std::uint64_t>(price));
+  return mix64(h ^ qty);
+}
+
+// Hash over every symbol's levels (price, qty, count) in book order.
+template <class SymbolBooks>
+std::uint64_t levels_checksum(const SymbolBooks& books) {
+  std::uint64_t h = 0x5EED;
+  const auto mix = [&](std::uint64_t v) { h = mix64(h ^ v) + 0x9E3779B97F4A7C15ULL; };
+  for (std::size_t s = 0; s < books.size(); ++s) {
+    const auto visit = [&](const Level& l) {
+      mix(s);
+      mix(static_cast<std::uint64_t>(l.price));
+      mix(l.qty);
+      mix(l.count);
+      return true;
+    };
+    mix(0xB1D);
+    books[s].bids.for_each(visit);
+    mix(0xA5C);
+    books[s].asks.for_each(visit);
+  }
+  return h;
+}
+
 }  // namespace obl::book

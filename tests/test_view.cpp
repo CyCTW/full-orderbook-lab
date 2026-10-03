@@ -113,7 +113,7 @@ void check_engine(const std::vector<Event>& ev, std::uint64_t seed, bool conflat
       return;
     }
   }
-  CHECK_EQ(b.checksum(), ref.checksum());
+  CHECK_EQ(b.state_checksum(), ref.state_checksum());
   CHECK_EQ(b.stats().level_missing, 0u);
   const auto& st = eng.stats();
   CHECK_EQ(st.fallback_refills, 0u);
@@ -165,6 +165,9 @@ int main() {
       // exactly the published depth: every cleared level forces a refill
       check_engine<ArrayOpenBook, 5>(deep, 6, conflate, k);
       check_engine<ArrayOpenBook, 5>(thin, 7, conflate, k);
+      // aggregate-only books under the engine
+      check_engine<ArrayInlineAggBook, 6>(thin, 8, conflate, k);
+      check_engine<ArrayOpenAggBook, 10>(deep, 9, conflate, k);
     }
   return test_result("test_view");
 }

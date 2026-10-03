@@ -285,7 +285,7 @@ class ViewFirstEngine {
         return &o;
       }
     ++stats_.lookups;
-    const Order* o = book_.find_order(sym, id);
+    const auto* o = book_.find_order(sym, id);
     if (!o) return nullptr;
     overlay_.push_back({sym, id, o->side(), o->price, o->qty, true, true, o->price, o->qty});
     return &overlay_.back();

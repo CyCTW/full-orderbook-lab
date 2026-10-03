@@ -156,16 +156,25 @@ class L3Book {
   void clear_symbol(SymbolId sym) {
     if (sym >= books_.size()) return;
     SymbolBook& b = books_[sym];
-    const auto drop = [&](const Level& l) {
-      queues_.for_each(l, pool_, [&](std::uint32_t i) {
+    if constexpr (Queues::kFifo) {
+      const auto drop = [&](const Level& l) {
+        queues_.for_each(l, pool_, [&](std::uint32_t i) {
+          index_.erase(sym, pool_[i].id);
+          pool_.release(i);
+        });
+        queues_.release(l);
+        return true;
+      };
+      b.bids.for_each(drop);
+      b.asks.for_each(drop);
+    } else {
+      // No per-level order lists: scan the pool (symbol clears are rare).
+      for_each_live([&](std::uint32_t i) {
+        if (pool_[i].symbol() != sym) return;
         index_.erase(sym, pool_[i].id);
         pool_.release(i);
       });
-      queues_.release(l);
-      return true;
-    };
-    b.bids.for_each(drop);
-    b.asks.for_each(drop);
+    }
     b.bids.clear();
     b.asks.clear();
   }
@@ -215,14 +224,19 @@ class L3Book {
     return out;
   }
 
+  static constexpr bool kQueueOrder = Queues::kFifo;
+
   // Visits the orders of a level in queue (FIFO) order: f(const Order&).
   template <class F>
+    requires Queues::kFifo
   void for_each_order(const Level& l, F&& f) const {
     queues_.for_each(l, pool_, [&](std::uint32_t i) { f(pool_[i]); });
   }
 
   // Order ids at a level in queue (FIFO) order.
-  std::vector<OrderId> queue(const Level& l) const {
+  std::vector<OrderId> queue(const Level& l) const
+    requires Queues::kFifo
+  {
     std::vector<OrderId> ids;
     for_each_order(l, [&](const Order& o) { ids.push_back(o.id); });
     return ids;
@@ -230,7 +244,9 @@ class L3Book {
 
   // Hash over every symbol's full depth including per-level queue order.
   // Two variants processing the same feed must produce the same value.
+  // Without queues this falls back to state_checksum().
   std::uint64_t checksum() const {
+    if constexpr (!Queues::kFifo) return state_checksum();
     std::uint64_t h = 0x12345678;
     const auto mix = [&](std::uint64_t v) { h = mix64(h ^ v) + 0x9E3779B97F4A7C15ULL; };
     for (SymbolId s = 0; s < books_.size(); ++s) {
@@ -239,10 +255,11 @@ class L3Book {
         mix(static_cast<std::uint64_t>(l.price));
         mix(l.qty);
         mix(l.count);
-        for_each_order(l, [&](const Order& o) {
-          mix(o.id);
-          mix(o.qty);
-        });
+        if constexpr (Queues::kFifo)
+          for_each_order(l, [&](const Order& o) {
+            mix(o.id);
+            mix(o.qty);
+          });
         return true;
       };
       mix(0xB1D);
@@ -253,7 +270,28 @@ class L3Book {
     return h;
   }
 
+  // Queue-order independent: every level (price, qty, count) plus the set of
+  // resting orders. Comparable between books with and without queues.
+  std::uint64_t state_checksum() const {
+    std::uint64_t h = levels_checksum(books_);
+    std::uint64_t orders = 0;
+    for_each_live([&](std::uint32_t i) {
+      const Order& o = pool_[i];
+      orders += order_hash(o.symbol(), o.id, o.side(), o.price, o.qty);
+    });
+    return mix64(h ^ orders);
+  }
+
  private:
+  // Visits every live pool slot (a freed slot is no longer what the index maps its key to).
+  template <class F>
+  void for_each_live(F&& f) const {
+    for (std::uint32_t i = 0; i < pool_.capacity(); ++i) {
+      const Order& o = pool_[i];
+      if (index_.find(o.symbol(), o.id) == i) f(i);
+    }
+  }
+
   SymbolBook& book_for(SymbolId sym) {
     if (sym >= books_.size()) books_.resize(static_cast<std::size_t>(sym) + 1);
     return books_[sym];

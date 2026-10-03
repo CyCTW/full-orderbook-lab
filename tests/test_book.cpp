@@ -1,6 +1,7 @@
 // Book semantics + differential tests: every variant must match a naive
 // reference book (std::map + std::list) after every operation, including the
-// FIFO queue order at each price level.
+// FIFO queue order at each price level (aggregate-only variants: levels plus
+// every order's side/price/qty).
 
 #include <list>
 #include <map>
@@ -119,6 +120,7 @@ class ReferenceBook {
 };
 
 template <class Book>
+  requires Book::kQueueOrder
 Snapshot snapshot(const Book& b) {
   Snapshot out;
   for (SymbolId s = 0; s < b.symbols(); ++s) {
@@ -143,6 +145,43 @@ Snapshot snapshot(const Book& b) {
   return out;
 }
 
+// Aggregate-only books: same levels (price, total qty, count) and the same
+// resting orders (side, price, qty), queue order not compared.
+template <class Book>
+bool matches_aggregate(const Book& b, const Snapshot& expect) {
+  using Agg = std::tuple<SymbolId, int, Price, std::uint64_t, std::uint32_t>;
+  std::vector<Agg> got, want;
+  for (SymbolId s = 0; s < b.symbols(); ++s) {
+    const auto take = [&](int side) {
+      return [&, side](const Level& l) {
+        got.emplace_back(s, side, l.price, l.qty, l.count);
+        return true;
+      };
+    };
+    b.book(s)->bids.for_each(take(0));
+    b.book(s)->asks.for_each(take(1));
+  }
+  std::size_t orders = 0;
+  bool ok = true;
+  for (const auto& [s, side, p, q] : expect) {
+    std::uint64_t total = 0;
+    for (const auto& [id, qty] : q) {
+      total += qty;
+      const auto* o = b.find_order(s, id);
+      ok &= o && o->price == p && o->qty == qty && static_cast<int>(o->side()) == side;
+    }
+    orders += q.size();
+    want.emplace_back(s, side, p, total, static_cast<std::uint32_t>(q.size()));
+  }
+  return ok && got == want && orders == b.order_count();
+}
+
+template <class Book>
+bool matches(const Book& b, const Snapshot& expect) {
+  if constexpr (Book::kQueueOrder) return snapshot(b) == expect;
+  else return matches_aggregate(b, expect);
+}
+
 template <class Book>
 void test_semantics() {
   Book b;
@@ -163,16 +202,17 @@ void test_semantics() {
 
   // qty decrease keeping priority: 100 stays ahead of 101
   CHECK(b.modify(1, 100, 1000, 4, true));
-  CHECK((b.queue(*b.book(1)->bids.best()) == std::vector<OrderId>{100, 101}));
+  if constexpr (Book::kQueueOrder) CHECK((b.queue(*b.book(1)->bids.best()) == std::vector<OrderId>{100, 101}));
   CHECK_EQ(b.book(1)->bids.best()->qty, 24u);
   // losing priority moves 100 behind 101
   CHECK(b.modify(1, 100, 1000, 6, false));
-  CHECK((b.queue(*b.book(1)->bids.best()) == std::vector<OrderId>{101, 100}));
+  if constexpr (Book::kQueueOrder) CHECK((b.queue(*b.book(1)->bids.best()) == std::vector<OrderId>{101, 100}));
   // partial then full execution
   CHECK(b.execute(1, 101, 5));
   CHECK_EQ(b.book(1)->bids.best()->qty, 21u);
   CHECK(b.execute(1, 101, 15));
-  CHECK((b.queue(*b.book(1)->bids.best()) == std::vector<OrderId>{100}));
+  if constexpr (Book::kQueueOrder) CHECK((b.queue(*b.book(1)->bids.best()) == std::vector<OrderId>{100}));
+  CHECK_EQ(b.book(1)->bids.best()->count, 1u);
   // price change empties the 1000 level, new best is 1005
   CHECK(b.modify(1, 100, 1005, 6, true));
   CHECK_EQ(b.depth(1, Side::Buy, 10).size(), 2u);
@@ -187,7 +227,8 @@ void test_semantics() {
       if (l.price != 1020) return true;
       found = true;
       CHECK_EQ(l.qty, 55u);
-      CHECK((b.queue(l) == std::vector<OrderId>{105, 104}));  // 104 went to the back
+      if constexpr (Book::kQueueOrder) CHECK((b.queue(l) == std::vector<OrderId>{105, 104}));  // 104 went to the back
+      CHECK_EQ(l.count, 2u);
       return false;
     });
     CHECK(found);
@@ -281,7 +322,7 @@ void test_random_vs_reference(const RandomOpsConfig& c) {
       // them must be rejected identically by both books.
     }
     if (n % 97 == 0 || n == c.ops - 1) {
-      const bool same = snapshot(b) == ref.snapshot();
+      const bool same = matches(b, ref.snapshot());
       CHECK(same);
       if (!same) {
         std::fprintf(stderr, "  diverged at op %d (%s)\n", n, Book::name().c_str());
@@ -321,7 +362,7 @@ void test_generated_flow() {
   ReferenceBook ref;
   for (const auto& e : events) apply(ref, e);
   const Snapshot expect = ref.snapshot();
-  std::uint64_t first_sum = 0;
+  std::uint64_t first_sum = 0, first_state = 0;
   bool first = true;
   for_each_variant([&]<class Book>() {
     Book b;
@@ -331,15 +372,16 @@ void test_generated_flow() {
     CHECK_EQ(b.stats().over_execution, 0u);
     CHECK_EQ(b.stats().level_missing, 0u);
     CHECK_EQ(b.order_count(), gen.live_orders());
-    CHECK(snapshot(b) == expect);
+    CHECK(matches(b, expect));
     for (SymbolId sym = 0; sym < b.symbols(); ++sym) {  // generator must never cross the book
       const Level* bid = b.book(sym)->bids.best();
       const Level* ask = b.book(sym)->asks.best();
       CHECK(!bid || !ask || bid->price < ask->price);
       CHECK(!bid || bid->price > 0);
     }
-    if (first) first_sum = b.checksum(), first = false;
-    CHECK_EQ(b.checksum(), first_sum);
+    if (first) first_sum = b.checksum(), first_state = b.state_checksum(), first = false;
+    if constexpr (Book::kQueueOrder) CHECK_EQ(b.checksum(), first_sum);
+    CHECK_EQ(b.state_checksum(), first_state);
   });
 }
 
@@ -366,6 +408,9 @@ int main() {
   test_semantics<CollidingBook>();
   test_random_vs_reference<CollidingBook>({4, 20000, 20, 1, 0.0});
   test_random_vs_reference<CollidingBook>({5, 20000, 3000, 10, 0.05});
+  // aggregate-only on the tiny window and with colliding fingerprints
+  test_random_vs_reference<AggBook<TinyWindowLevels>>({9, 30000, 3000, 1, 0.0});
+  test_random_vs_reference<L3Book<DenseArrayLevels, CompactOrderIndexT<4>, AggregateQueues>>({10, 20000, 20, 1, 0.0});
   test_generated_flow();
   return test_result("test_book");
 }

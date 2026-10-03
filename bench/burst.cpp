@@ -364,7 +364,8 @@ int main(int argc, char** argv) {
   if (!args.has("events")) {
     std::puts("usage: obl_burst --events X.ev [--packets X.pkt] [--book dense|dense-ankerl|map] [--publish-ns N]\n"
               "                 [--k 8] [--big 20] [--top5 [--cache-depth 5|10|16|32]] [--modes a,b]\n"
-              "  books: dense hybrid vector vector-bin map-oa btree dense-ankerl map");
+              "  books: dense hybrid vector vector-bin map-oa btree dense-ankerl map\n"
+              "         dense-compact dense-agg dense-compact-agg dense-inline (agg = levels only, no queue)");
     return 1;
   }
   const std::string evp = args.str("events", "");
@@ -419,6 +420,11 @@ int main(int argc, char** argv) {
   else if (which == "dense-ankerl") go.template operator()<book::ArrayDenseBook>();
 #endif
   else if (which == "map") go.template operator()<book::MapStdBook>();
+  // index / aggregation variants on the dense array
+  else if (which == "dense-compact") go.template operator()<book::ArrayCompactBook>();
+  else if (which == "dense-agg") go.template operator()<book::ArrayOpenAggBook>();
+  else if (which == "dense-compact-agg") go.template operator()<book::ArrayCompactAggBook>();
+  else if (which == "dense-inline") go.template operator()<book::ArrayInlineAggBook>();
   else {
     std::printf("unknown --book %s\n", which.c_str());
     return 1;

@@ -6,7 +6,9 @@
 // The capture is decoded once into feed-neutral events; each variant then
 // replays the same events. Every variant runs in a forked child so it starts
 // from a clean heap and its RSS growth can be measured in isolation. All
-// variants must end with the same full-depth checksum (including queue order).
+// variants must end with the same full-depth checksum (including queue order);
+// aggregate-only variants (no queue position) are held to the queue-independent
+// state checksum (levels + the set of resting orders).
 
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -38,7 +40,9 @@ struct Result {
   double p50 = 0, p90 = 0, p99 = 0, p999 = 0, max = 0;  // latency ns (if measured)
   double e2e_ns = -1;                     // decode + book per message, from raw packets (-1 = no packets)
   double pf_ns = -1;                      // replay with software prefetch (-1 = not run)
-  std::uint64_t checksum = 0;
+  std::uint64_t checksum = 0;        // includes queue order (state_checksum for aggregate-only books)
+  std::uint64_t state_checksum = 0;  // levels + set of resting orders
+  bool queue_order = true;
   std::uint64_t live_orders = 0;
   std::uint64_t unknown = 0, level_missing = 0;
   double rss_mb = 0;
@@ -122,6 +126,8 @@ Result run_variant(const std::vector<book::Event>& events, const pcap::Capture& 
     runs.push_back(ns / std::max<std::size_t>(1, events.size()));
     if (i == repeat - 1) {
       r.checksum = b->checksum();
+      r.state_checksum = b->state_checksum();
+      r.queue_order = Book::kQueueOrder;
       r.live_orders = b->order_count();
       r.unknown = b->stats().unknown_order;
       r.level_missing = b->stats().level_missing;
@@ -290,7 +296,7 @@ int main(int argc, char** argv) {
   if (latency) std::printf(" %7s %7s %7s %7s %8s", "p50", "p90", "p99", "p99.9", "max");
   std::printf(" %8s %7s %9s  %s\n", "dRSS MB", "THP MB", "orders", "checksum");
 
-  std::uint64_t ref = 0;
+  std::uint64_t ref = 0, ref_state = 0;
   bool have_ref = false, mismatch = false;
   std::vector<std::pair<std::string, Result>> rows;
   book::for_each_variant([&]<class Book>() {
@@ -309,9 +315,10 @@ int main(int argc, char** argv) {
     }
     if (!have_ref) {
       ref = r.checksum;
+      ref_state = r.state_checksum;
       have_ref = true;
     }
-    const bool same = r.checksum == ref && r.level_missing == 0;
+    const bool same = (!r.queue_order || r.checksum == ref) && r.state_checksum == ref_state && r.level_missing == 0;
     mismatch |= !same;
     std::printf("%-48s %7.1fns %7.1fns %8.2f %7.1fns", name.c_str(), r.best_ns, r.median_ns, 1e3 / r.best_ns,
                 r.e2e_ns);
@@ -342,6 +349,6 @@ int main(int argc, char** argv) {
     std::puts("\nERROR: variants disagree on the final book state");
     return 2;
   }
-  std::puts("\nall variants agree on the final book (full depth + queue order)");
+  std::puts("\nall variants agree on the final book (full depth + queue order; aggregate-only: levels + orders)");
   return 0;
 }

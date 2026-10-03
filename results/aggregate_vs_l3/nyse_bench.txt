@@ -1,0 +1,27 @@
+allocator: glibc (default)
+capture data/nyse_ibf/20190122.000000.010000.NYSE.IF.89_100.A.02.pcap.00001.gz (+20 more): 1436.2 MB, 13240492 frames, 13240492 UDP datagrams, 0 non-UDP, 0 truncated (36.35s)
+packets 13240492 (heartbeats 47833, duplicates 10, malformed 0), messages 14168972, gaps 0 (0 msgs missing), short msgs 0
+decode+record 133.8 ns/msg
+events 14138982: add 6744333, modify 570482, execute 66886, remove 6700041, replace 55724, cancel 0, clear 758
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)     p50     p90     p99   p99.9      max  dRSS MB  THP MB    orders  checksum
+dense_array + open_addressing                       55.2ns    57.1ns    18.13    96.0ns    66.4ns      55      87     159     418 87123630     54.6       0         0  701849944f44d081
+dense_array + compact_fp(8B)                        52.8ns    54.4ns    18.95    81.9ns    65.1ns      51      80     140     362  2449558     51.0       0         0  701849944f44d081
+dense_array + open_addressing + vector_queue        60.9ns    61.5ns    16.41    93.1ns    68.5ns      54      90     171     426  2207610     53.0       0         0  701849944f44d081
+dense_array + compact_fp(8B) + vector_queue         54.8ns    55.2ns    18.24    89.4ns    66.5ns      53      87     172     474  2567479     52.8       0         0  701849944f44d081
+dense_array + open_addressing + aggregate(no queue)    48.3ns    50.2ns    20.72    87.6ns    63.1ns      49      81     135     342  2542982     51.7       0         0  b6d8a9f6d4da26ea
+dense_array + compact_fp(8B) + aggregate(no queue)    47.8ns    51.4ns    20.93    79.6ns    62.7ns      49      84     149     383  2585316     50.9       0         0  b6d8a9f6d4da26ea
+dense_array + inline_table(aggregate)               47.8ns    48.1ns    20.94    91.9ns    49.6ns      48      79     151     408  3337018     51.8       0         0  b6d8a9f6d4da26ea
+
+per event type, ns (mean of lower 99.9% / p50 / p99), rdtsc overhead removed
+variant                                                          add              modify             execute              remove             replace              cancel
+dense_array + open_addressing                         47/   43/  149      47/   44/  124      61/   54/  194      52/   48/  149      97/   90/  271       0/    0/    0
+dense_array + compact_fp(8B)                          42/   39/  131      43/   40/  113      58/   52/  166      47/   44/  129      87/   80/  243       0/    0/    0
+dense_array + open_addressing + vector_queue          47/   43/  146      47/   42/  163      62/   56/  192      53/   48/  168     106/   97/  309       0/    0/    0
+dense_array + compact_fp(8B) + vector_queue           47/   43/  155      47/   40/  169      62/   55/  198      51/   46/  165     104/   93/  327       0/    0/    0
+dense_array + open_addressing + aggregate(no queue)      41/   39/  114      38/   36/   96      57/   52/  154      45/   42/  132      88/   82/  234       0/    0/    0
+dense_array + compact_fp(8B) + aggregate(no queue)      42/   39/  135      41/   38/  115      61/   54/  189      46/   41/  141      87/   79/  266       0/    0/    0
+dense_array + inline_table(aggregate)                 41/   38/  146      37/   34/   96      52/   46/  158      43/   39/  137     100/   92/  271       0/    0/    0
+(event share)                                                  47.7%                4.0%                0.5%               47.4%                0.4%                0.0%
+
+all variants agree on the final book (full depth + queue order; aggregate-only: levels + orders)

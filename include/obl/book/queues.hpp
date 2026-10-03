@@ -10,6 +10,10 @@
 //                 hot) level array and never touches other orders; the array
 //                 is compacted once half of it is tombstones, which rewrites
 //                 the survivors' slot numbers (amortized O(1) per removal).
+//   AggregateQueues no queue at all: a level keeps only total quantity and
+//                 order count (market-by-price fed from market-by-order).
+//                 Removal never touches another order. Queue position and
+//                 per-level order iteration are gone (kFifo == false).
 
 #include <cstdint>
 #include <vector>
@@ -20,6 +24,7 @@ namespace obl::book {
 
 struct ListQueues {
   static constexpr const char* name = nullptr;  // the default; not shown in variant names
+  static constexpr bool kFifo = true;
 
   void push_back(Level& l, OrderPool& pool, std::uint32_t i) { level_push_back(l, pool, i); }
   void unlink(Level& l, OrderPool& pool, std::uint32_t i) { level_unlink(l, pool, i); }
@@ -39,6 +44,7 @@ struct ListQueues {
 class VectorQueues {
  public:
   static constexpr const char* name = "vector_queue";
+  static constexpr bool kFifo = true;
 
   // Level::head holds the queue id (kNil = none yet); Order::prev the slot.
   void push_back(Level& l, OrderPool& pool, std::uint32_t i) {
@@ -115,6 +121,21 @@ class VectorQueues {
 
   std::vector<Queue> queues_;
   std::vector<std::uint32_t> free_;
+};
+
+struct AggregateQueues {
+  static constexpr const char* name = "aggregate(no queue)";
+  static constexpr bool kFifo = false;
+
+  void push_back(Level& l, OrderPool& pool, std::uint32_t i) {
+    l.qty += pool[i].qty;
+    ++l.count;
+  }
+  void unlink(Level& l, OrderPool& pool, std::uint32_t i) {
+    l.qty -= pool[i].qty;
+    --l.count;
+  }
+  void release(const Level&) {}
 };
 
 }  // namespace obl::book
