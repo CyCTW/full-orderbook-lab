@@ -458,4 +458,36 @@ class OcgcGateway {
   ControlChannel* control_ = nullptr;
 };
 
+
+// Spreads new orders over several sessions (each with its own throttle) that share one order
+// table: the active session with the most throttle room gets the next order; cancels and amends
+// follow the order's route.
+template <class Gateway>
+class SessionRouter {
+ public:
+  void add(Gateway& g) { gws_.push_back(&g); }
+
+  // nullptr if no session is up.
+  Gateway* pick(std::uint64_t now) const {
+    Gateway* best = nullptr;
+    std::uint32_t best_room = 0;
+    for (Gateway* g : gws_) {
+      if (!g->active()) continue;
+      const Throttle& t = g->throttle();
+      const std::uint32_t room =
+          t.limit() == 0 ? 0xFFFFFFFFu - t.queued_total() : t.limit() - std::min(t.limit(), t.window_used(now) + t.queued_total());
+      if (!best || room > best_room) {
+        best = g;
+        best_room = room;
+      }
+    }
+    return best;
+  }
+  Gateway& for_order(const OrderTable& orders, OrderSlot s) const { return *gws_[orders.route(s)]; }
+  std::size_t size() const { return gws_.size(); }
+
+ private:
+  std::vector<Gateway*> gws_;
+};
+
 }  // namespace obl::gw::ocgc

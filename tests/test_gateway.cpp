@@ -412,6 +412,84 @@ void test_two_sessions_share_orders() {
   CHECK_EQ(orders.position(t).open_buy_qty, 200 * S);                 // one exposure total
   CHECK_EQ(ex.live_orders("CO1"), 1u);
   CHECK_EQ(ex.live_orders("CO2"), 1u);
+
+  // the router sends the cancel of each order on its own session
+  SessionRouter<Gw> router;
+  router.add(*g1);
+  router.add(*g2);
+  CHECK(router.for_order(orders, b.slot).cancel(b.slot, now) == SendStatus::Sent);
+  pump();
+  CHECK(orders.order(b.slot).state == OrdState::Cancelled);
+  CHECK_EQ(ex.live_orders("CO2"), 0u);
+  CHECK(router.pick(now) != nullptr);
+}
+
+void test_router_spreads_load() {
+  // two sessions, each throttled at 2 msgs/s: the router fills both before anything queues
+  sim::Exchange ex;
+  ex.add_symbol("700");
+  ex.add_client("CO1", "pw");
+  ex.add_client("CO2", "pw");
+  InstrumentTable ins;
+  const SymbolIdx t = ins.add({"700", 100 * S, true, false, 400 * S});
+  OrderTable orders(Harness::ocfg());
+  RiskEngine risk(ins, orders, 8);
+  Recorder app;
+  Wire w1, w2;
+  ClientTransport t1{&w1}, t2{&w2};
+  auto make = [&](const char* comp, ClientTransport& tx, std::uint8_t route) {
+    GatewayConfig g;
+    g.session.comp_id = comp;
+    g.session.encrypted_password = "pw";
+    g.session.store_reserve_bytes = 1 << 20;
+    g.session.store_reserve_msgs = 1 << 12;
+    g.broker_id = "1234";
+    g.bcan = "ABC123.2568";
+    g.trade_date = 20261003;
+    g.route = route;
+    g.throttle.msgs_per_sec = 2;
+    return std::make_unique<Gw>(g, tx, app, ins, orders, risk);
+  };
+  auto g1 = make("CO1", t1, 0);
+  auto g2 = make("CO2", t2, 1);
+  std::uint64_t now = kT0;
+  const int c1 = ex.connect({[&](const std::uint8_t* p, std::size_t n) { w1.to_client.emplace_back(p, p + n); }, [] {}}, now);
+  const int c2 = ex.connect({[&](const std::uint8_t* p, std::size_t n) { w2.to_client.emplace_back(p, p + n); }, [] {}}, now);
+  auto pump = [&] {
+    for (bool busy = true; busy;) {
+      busy = false;
+      for (auto [w, g, c] : {std::tuple{&w1, g1.get(), c1}, std::tuple{&w2, g2.get(), c2}}) {
+        for (; !w->to_exchange.empty(); busy = true) {
+          auto m = w->to_exchange.front();
+          w->to_exchange.pop_front();
+          ex.on_bytes(c, m.data(), m.size(), now);
+        }
+        for (; !w->to_client.empty(); busy = true) {
+          auto m = w->to_client.front();
+          w->to_client.pop_front();
+          g->on_bytes(m.data(), m.size(), now);
+        }
+      }
+    }
+  };
+  g1->on_connected(now);
+  g2->on_connected(now);
+  pump();
+  SessionRouter<Gw> router;
+  router.add(*g1);
+  router.add(*g2);
+  int sent = 0, queued = 0;
+  for (int i = 0; i < 5; ++i) {
+    Gw* g = router.pick(now);
+    CHECK(g != nullptr);
+    const auto r = g->new_order(t, OrdSide::Buy, (390 - i) * S, 100 * S, now);
+    sent += r.status == SendStatus::Sent;
+    queued += r.status == SendStatus::Queued;
+    pump();
+  }
+  CHECK_EQ(sent, 4);  // 2 per session
+  CHECK_EQ(queued, 1);
+  CHECK_EQ(ex.live_orders("CO1") + ex.live_orders("CO2"), 4u);
 }
 
 void test_session_down_drops_queue() {
@@ -529,6 +607,7 @@ int main() {
   test_reconnect();
   test_bad_checksum_and_refused_logon();
   test_two_sessions_share_orders();
+  test_router_spreads_load();
   test_session_down_drops_queue();
   lost_outbound(ReplayPolicy::Replay);
   lost_outbound(ReplayPolicy::GapFillBusiness);
