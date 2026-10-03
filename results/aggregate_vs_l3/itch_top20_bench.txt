@@ -1,0 +1,25 @@
+allocator: glibc (default)
+events file data/itch/top20_20251208.ev (no end-to-end column: no packets)
+events 95191963: add 34953319, modify 0, execute 2065686, remove 33303670, replace 24447250, cancel 422018, clear 0
+
+variant                                               best    median   Mevt/s   e2e/msg   pf(k=4)     p50     p90     p99   p99.9      max  dRSS MB  THP MB    orders  checksum
+dense_array + open_addressing                      115.7ns   122.0ns     8.64    -1.0ns    94.0ns     120     238     497     747 143589356    149.2       0         0  d300f0520f7624e2
+dense_array + compact_fp(8B)                       109.0ns   116.5ns     9.17    -1.0ns   117.5ns      85     195     432     646 101751558    131.0       0         0  d300f0520f7624e2
+dense_array + open_addressing + vector_queue       142.1ns   142.6ns     7.04    -1.0ns   112.3ns     171     291     583    1436 313114679    163.2       0         0  d300f0520f7624e2
+dense_array + compact_fp(8B) + vector_queue        131.9ns   132.7ns     7.58    -1.0ns   132.0ns      99     213     478     931 105324919    136.5       0         0  d300f0520f7624e2
+dense_array + open_addressing + aggregate(no queue)   113.9ns   123.4ns     8.78    -1.0ns   100.1ns     108     226     482     756 151809234    150.9       0         0  b06e78c1e2e15262
+dense_array + compact_fp(8B) + aggregate(no queue)   104.1ns   108.0ns     9.61    -1.0ns   108.4ns      75     218     455     708 113137193    127.7       0         0  b06e78c1e2e15262
+dense_array + inline_table(aggregate)              124.6ns   136.5ns     8.03    -1.0ns   102.3ns     127     250     516     773 381316366    158.8       0         0  b06e78c1e2e15262
+
+per event type, ns (mean of lower 99.9% / p50 / p99), rdtsc overhead removed
+variant                                                          add              modify             execute              remove             replace              cancel
+dense_array + open_addressing                        118/  119/  481       0/    0/    0      83/   58/  377      89/   59/  415     171/  166/  542      59/   44/  341
+dense_array + compact_fp(8B)                          95/   98/  429       0/    0/    0      70/   55/  296      71/   52/  323     137/  134/  485      55/   44/  256
+dense_array + open_addressing + vector_queue         142/  169/  536       0/    0/    0     107/   69/  481      99/   56/  548     228/  211/  633      71/   46/  403
+dense_array + compact_fp(8B) + vector_queue           99/  102/  446       0/    0/    0      83/   63/  366      74/   49/  413     160/  146/  525      59/   44/  292
+dense_array + open_addressing + aggregate(no queue)     108/  114/  465       0/    0/    0      89/   59/  435      73/   46/  398     158/  150/  529      60/   41/  356
+dense_array + compact_fp(8B) + aggregate(no queue)     103/   77/  444       0/    0/    0      82/   56/  398      67/   43/  382     147/  143/  503      57/   42/  340
+dense_array + inline_table(aggregate)                126/  124/  518       0/    0/    0      85/   53/  405      83/   47/  418     180/  185/  553      51/   39/  241
+(event share)                                                  36.7%                0.0%                2.2%               35.0%               25.7%                0.4%
+
+all variants agree on the final book (full depth + queue order; aggregate-only: levels + orders)

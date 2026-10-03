@@ -1,0 +1,23 @@
+95191963 events in 93761480 packets; 11559 packets with >= 20 messages (0.44% of messages); tsc 2.800 GHz
+
+view-first depth cache: 10 levels per side
+book: dense_array + open_addressing, publish = top-5 snapshot when changed
+                         |           all messages |        msgs in packets >= big |    last msg of big pkt |   first msg of big pkt |    total   pubs/
+strategy                 |    p50     p99   p99.9 |    p50     p99   p99.9        |    p50     p99   p99.9 |    p50     p99   p99.9 |  seconds     msg
+per-message              |    231     758    9765 |   4777   37171   69750        |   9417   43469   85937 |    271    1125   28045 |    30.28    0.59
+prefetch                 |    214     681    5634 |   2859   27954   61853        |   5153   31757   81110 |    332    1103   23222 |    27.27    0.59
+view-first               |     79     495    2836 |   1015   13401   31576        |   1626   16792   37873 |     71     496     876 |    29.85    0.59
+view-first + prefetch    |     82     488    2336 |   1295    5668   29008        |   1983    7709   31590 |    249     865    1282 |    26.37    0.59
+
+whole-packet completion (incl. deferred L3 work), packets >= 20 msgs; view-first refills / deferred decisions:
+per-message              pkt done p50    9442 p99   43488 ns   refills 0, deferred 0
+prefetch                 pkt done p50    5181 p99   31776 ns   refills 0, deferred 0
+view-first               pkt done p50    6049 p99   34846 ns   refills 106486, deferred 0
+view-first + prefetch    pkt done p50    4554 p99   28665 ns   refills 106486, deferred 0
+
+mean latency (ns) by position in packets of >= 20 messages:
+position                       1       5      10      15      20      30      40      50      64+
+per-message                  390    1718    3360    5992   25785   30664   13788       0       0
+prefetch                     462    1324    2306    3306   13713   16830    6735       0       0
+view-first                   111     490     953    1416    1883    2562   12124       0       0
+view-first + prefetch        300     650    1029    1343    1649    2144    5232       0       0
