@@ -138,7 +138,13 @@ gateway 佔的是「strategy 決策完成 → 封包離開」這一段，以及�
 5. **G5–G7**：跨執行緒與 socket 的量測。
 6. **G8**：端到端整合與延遲拆解，結果寫進 README（延續「結果 N」格式）。
 
-## 5. 待決定
+## 5. 進度（2026-10-03）
 
-- 部署型態：先做 in-process library，還是一開始就做獨立行程 + shared-memory ring？
-- 範圍：是否包含 FIX（文字協定對照組）與 drop copy / 對帳？
+功能面已完成，見 [`order_gateway.md`](order_gateway.md) §4 的完成度表：OCG-C 協定、session、委託狀態表、
+風控與 kill switch、throttle、多 session、Lookup 與 primary / mirror 切換、RSA 登入、稽核 log、對帳、
+交易所模擬器、TCP 端到端測試與 fuzzing。下一階段是延遲量測（§3 的 G1–G9）。
+
+## 6. 待決定
+
+- 部署型態：目前是 in-process（strategy 與 gateway 同一執行緒）；獨立行程 + shared-memory ring 尚未做，量延遲時（G5）可做對照。
+- 範圍：FIX（文字協定對照組）與 OCG-C Drop Copy session 尚未做；對帳目前以 audit log 重建成交，再與外部檔案比對。

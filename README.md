@@ -2,6 +2,8 @@
 
 比較不同 L3（market-by-order）order book 資料結構的實驗場。
 
+另一個子專案：HKEX OCG-C order gateway（送單端），見 [`docs/order_gateway.md`](docs/order_gateway.md)。
+
 ## 資料來源
 
 | 交易所 / feed | 公開樣本 | 與 HKEX OMD-C 的相似度 |
