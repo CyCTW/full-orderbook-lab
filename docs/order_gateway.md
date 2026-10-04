@@ -1,9 +1,10 @@
 # Order Gateway（HKEX OCG-C）：架構與功能
 
 本文件說明 `include/obl/gw/` 下已完成的 order gateway：架構、各模組、對照 [規劃](order_gateway_plan.md) §2 的完成度、
-主要設計決策，以及尚未處理的部分。協定細節與 checksum 量測見 [`ocgc_binary.md`](ocgc_binary.md)。
+主要設計決策，以及尚未處理的部分。協定細節與 checksum 量測見 [`ocgc_binary.md`](ocgc_binary.md)，
+延遲優化與量測見 [`gateway_optimizations.md`](gateway_optimizations.md)。
 
-延遲量測尚未開始（依規劃，功能先完整，再量延遲）。
+送單路徑目前約 83 ns（p50，純軟體，到 bytes 交給傳輸層），詳見 [`gateway_optimizations.md`](gateway_optimizations.md)。
 
 ## 1. 架構
 
